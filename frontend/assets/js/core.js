@@ -85,6 +85,7 @@
       if (b) A.navigate(b.getAttribute('data-view'));
     });
     A.$('#btn-run').addEventListener('click', A.runSchedule);
+    A.$('#btn-import').addEventListener('click', A.openExcelImport);
     A.$('#btn-settings').addEventListener('click', function () { A.openSettings(); });
     A.$('#drawer-close').addEventListener('click', function () { A.closeDrawer(); });
     A.$('#drawer-scrim').addEventListener('click', function () { A.closeDrawer(); });
@@ -112,6 +113,16 @@
     A.syncNav();
     A.renderView();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  A.openExcelImport = function () {
+    if (A.state.mode !== 'server') {
+      A.toast('Excel 导入需要启动后端服务：运行 ./run.sh 后访问 http://127.0.0.1:8080');
+      return;
+    }
+    A.navigate('inputs');
+    var input = A.$('#cfg-file');
+    if (input) input.click();
   };
 
   A.runSchedule = function () {

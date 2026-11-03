@@ -4,7 +4,11 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 bash "$ROOT/deploy.sh" start
 result=$?
 if [ "$result" -eq 0 ]; then
-  echo "服务已在后台运行，可以关闭此窗口。请在浏览器打开上方访问地址。"
+  if [ "${XMC_OPEN_BROWSER:-}" = "0" ]; then
+    echo "服务已在后台运行，请使用上方访问地址。"
+  else
+    echo "服务已在后台运行。桌面环境会自动打开浏览器；SSH 或无界面服务器请使用上方访问地址。"
+  fi
 else
   echo "启动未成功，请根据上方提示处理后重试。"
 fi

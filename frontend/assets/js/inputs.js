@@ -18,7 +18,8 @@
     if (!sheets.some(function (s) { return s.name === A.state.inputs.sheet; }) && sheets.length) A.state.inputs.sheet = sheets[0].name;
     var html = '<div class="source-hero"><div><div class="source-title">' + esc((meta.source || '内置算例').split(/[\\/]/).pop()) + '</div>' +
       '<div class="source-sub">' + esc(meta.month || '') + ' · ' + num(d.lots.length) + ' lot · ' + sheets.length + ' 张表</div></div>' +
-      '<div class="source-actions"><span class="pill green">Excel 只读</span>' +
+      '<div class="source-actions"><button class="btn small source-import" id="inputs-import" type="button">Excel 导入</button>' +
+      '<span class="pill green">Excel 只读</span>' +
       '<button class="btn ghost small" data-export="mps">导出 MPS</button><button class="btn ghost small" data-export="lots">导出排产</button></div></div>';
 
     html += A.configurationHTML();
@@ -116,6 +117,10 @@ function validationHTML() {
       return '<div class="check-item"><span class="check-icon ' + (c[0] ? '' : 'warn') + '">' + (c[0] ? '✓' : '!') + '</span><span>' + esc(c[1]) + '</span></div>';
     }).join('');
   }
+
+  document.addEventListener('click', function (event) {
+    if (event.target.closest('#inputs-import')) A.openExcelImport();
+  });
 
   A.renderInputs = renderInputs;
   A.renderInputsTable = renderInputsTable;

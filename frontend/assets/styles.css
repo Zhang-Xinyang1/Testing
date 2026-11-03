@@ -564,6 +564,8 @@ a { color: var(--blue); text-decoration: none; }
 .source-actions { display: flex; align-items: center; gap: 9px; flex: none; }
 .source-actions .btn { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); color: #e7f0fc; }
 .source-actions .btn:hover { background: rgba(255,255,255,.16); }
+.source-actions .btn.source-import { background: #fff; border-color: #fff; color: #17365d; font-weight: 700; }
+.source-actions .btn.source-import:hover { background: #eaf2ff; border-color: #eaf2ff; }
 
 .pipeline {
   display: grid; grid-template-columns: 1fr 26px 1fr 26px 1fr 26px 1fr; gap: 8px;

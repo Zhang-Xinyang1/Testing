@@ -5,8 +5,6 @@ set "PYTHONUTF8=1"
 set "ROOT=%~dp0"
 set "ACTION=%~1"
 if not defined ACTION set "ACTION=start"
-if /I "%ACTION%"=="start" set "XMC_OPEN_BROWSER=1"
-if /I "%ACTION%"=="restart" set "XMC_OPEN_BROWSER=1"
 
 if defined PYTHON_BIN (
   "%PYTHON_BIN%" -c "import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)" >nul 2>nul

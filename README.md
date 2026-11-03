@@ -4,17 +4,18 @@
 
 ## 服务器一键部署
 
-上传整个 Testing 文件夹：Windows 双击 `一键启动.bat`，Linux 执行 `bash 一键启动.sh`。启动后访问 `http://服务器IP:8080`。后台运行、离线检查环境，详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
+上传整个 Testing 文件夹：Windows 双击 `一键启动.bat`，Linux/macOS 执行 `bash 一键启动.sh`。脚本会先校验后端文件、前端入口与静态资源、Excel 数据和端口，再后台启动服务，并确认 `/api/health`、首页和 `/api/data` 均可用；桌面环境自动打开本机浏览器。启动后访问 `http://服务器IP:8080`。详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
 
 | 操作 | Windows | Linux / macOS |
 |---|---|---|
 | 启动 | 双击 `一键启动.bat` | `bash 一键启动.sh` |
-| 停止 | 双击 `停止服务.bat` | `bash deploy.sh stop` |
-| 重启 | 双击 `重启服务.bat` | `bash deploy.sh restart` |
+| 停止 | 双击 `停止服务.bat` | `bash 停止服务.sh` |
+| 重启 | 双击 `重启服务.bat` | `bash 重启服务.sh` |
 | 状态 | `deploy.bat status` | `bash deploy.sh status` |
+| 检查 | `deploy.bat check` | `bash deploy.sh check` |
 | 日志 | `deploy.bat logs` | `bash deploy.sh logs` |
 
-Windows 启动成功会自动打开本机浏览器；其他电脑使用服务器 IP。关闭启动窗口后服务继续运行，但普通后台模式不保证退出登录或重启后恢复。Linux systemd 开机自启为可选操作，Windows 暂未集成开机自启。
+Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏览器；SSH/无界面服务器只打印访问地址。前端与 API 由同一个 Python 服务同源提供，无需单独构建或配置前端地址。更新后端或配置后请执行重启；只更新前端静态资源时刷新页面即可。关闭启动窗口后服务继续运行，但普通后台模式不保证退出登录或重启后恢复。Linux systemd 开机自启为可选操作，Windows 暂未集成开机自启。
 
 ## 开发启动
 
@@ -27,7 +28,7 @@ Windows 启动成功会自动打开本机浏览器；其他电脑使用服务器
 
 ## 使用
 
-1. 数据配置页选择 `.xlsx`，上传只读副本。
+1. 打开“数据配置 → 生产配置 → Excel 导入”，选择 `.xlsx` 上传只读副本；静态打开页面时该入口不可用，需通过后端地址访问。
 2. 按需调整 Sheet/字段映射、机台、PM、借机、在制占用。
 3. 点击保存并排产。采用新文件原有资源时用“恢复参考配置”，该操作会清空手工覆盖，含在制快照。
 4. 查看 MPS 和甘特图，或导出 CSV。
@@ -45,6 +46,7 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 ## 验证
 
 ```bash
+bash deploy.sh check
 python3 -m unittest discover -s tests -v
 python3 -m py_compile backend/server.py backend/server_core.py backend/data_sources.py backend/diagnostics.py deployment/manage.py
 ```
