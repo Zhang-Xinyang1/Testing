@@ -107,6 +107,12 @@ class ConfigurationTests(unittest.TestCase):
                     html = response.read().decode()
                 self.assertIn('assets/js/configuration.js', html)
                 self.assertNotIn('assets/js/resources.js', html)
+                report = post('/api/runs', {'input': saved['data'], 'options': {},
+                    'result': None, 'error': 'test failure', 'trigger': '测试'})['report']
+                self.assertEqual(report['findings'][0]['code'], 'S01')
+                with urllib.request.urlopen(base + '/api/runs') as response:
+                    runs = json.load(response)['runs']
+                self.assertEqual(runs[0]['id'], report['id'])
             finally:
                 server.shutdown()
                 server.server_close()

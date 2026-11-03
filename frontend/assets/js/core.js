@@ -117,11 +117,12 @@
   A.runSchedule = function () {
     if (!A.state.data) return;
     A.showLoading('正在排产', A.num(A.state.data.lots.length) + ' lot');
-    setTimeout(function () {
+    setTimeout(async function () {
       try {
         var t0 = performance.now();
         var res = SCHED.run(A.state.data, A.state.options);
         A.state.result = res;
+        if (A.recordDiagnostics) await A.recordDiagnostics(res, null);
         if (!A.state.gantt.anchor) A.state.gantt.anchor = res.start;
         A.hideLoading();
         A.updateRunChip();
@@ -130,7 +131,9 @@
       } catch (err) {
         console.error(err);
         A.hideLoading();
-        A.$('#content').innerHTML = '<div class="error-box"><b>排产失败</b>\n' + A.esc(err && err.stack ? err.stack : err) + '</div>';
+        if (A.recordDiagnostics) await A.recordDiagnostics(null, err);
+        A.toast('排产失败：' + err.message);
+        if (A.renderDiagnostics) A.navigate('diagnostics');
       }
     }, 60);
   };
@@ -152,6 +155,7 @@
     A.$('#run-chip').textContent = '上次排产 ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + ' · ' + Math.round(A.state.result.runMs) + ' ms';
   };
   A.renderView = function () {
+    if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
     if (!A.state.result) return;
     if (A.state.view === 'mps') A.renderMps();
     else if (A.state.view === 'gantt') A.renderGantt();

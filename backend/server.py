@@ -8,6 +8,7 @@ from urllib.parse import urlparse, unquote
 
 from server_core import ROOT, DEFAULT_CONFIG, load_config, public_config, build_payload, read_workbook
 from data_sources import oracle_settings
+from diagnostics import history, record_run
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -46,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(public_config(self.server.config_path))
             if path == '/api/data':
                 return self._json(build_payload(self.server.config_path))
+            if path == '/api/runs':
+                return self._json({'runs': history(self.server.config_path)})
             return self.serve_static(path)
         except Exception as e:
             traceback.print_exc()
@@ -53,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         endpoint = urlparse(self.path).path
-        if endpoint not in ('/api/config', '/api/preview', '/api/uploads', '/api/oracle/config'):
+        if endpoint not in ('/api/config', '/api/preview', '/api/uploads', '/api/oracle/config', '/api/runs'):
             return self._json({'error': 'Unknown endpoint'}, 404)
         # Configuration writes are same-origin, even when deployed behind a proxy.
         from urllib.parse import urlsplit
@@ -64,9 +67,11 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             if endpoint == '/api/uploads':
                 return self.upload_excel(length)
-            if not 0 < length <= 2_000_000:
+            if not 0 < length <= (40_000_000 if endpoint == '/api/runs' else 2_000_000):
                 raise ValueError('配置大小无效')
             update = json.loads(self.rfile.read(length))
+            if endpoint == '/api/runs':
+                return self._json({'ok': True, 'report': record_run(self.server.config_path, update)})
             if endpoint == '/api/oracle/config':
                 settings = oracle_settings(update)
                 with CONFIG_LOCK:
