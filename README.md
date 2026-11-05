@@ -4,11 +4,11 @@
 
 ## 服务器一键部署
 
-上传整个 Testing 文件夹：Windows 双击 `一键启动.bat`，Linux/macOS 执行 `bash 一键启动.sh`。脚本会先校验后端文件、前端入口与静态资源、Excel 数据和端口，再后台启动服务，并确认 `/api/health`、首页和 `/api/data` 均可用；桌面环境自动打开本机浏览器。启动后访问 `http://服务器IP:8080`。详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
+上传整个 Testing 文件夹：Windows 双击 `一键启动.bat`，macOS 双击 `一键启动.command`（Linux/macOS 终端也可执行 `bash 一键启动.sh`）。脚本会先校验后端文件、前端入口与静态资源、Excel 数据和端口，再后台启动服务，并确认 `/api/health`、首页和 `/api/data` 均可用；桌面环境自动打开本机浏览器。启动后访问 `http://服务器IP:8080`。详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
 
 | 操作 | Windows | Linux / macOS |
 |---|---|---|
-| 启动 | 双击 `一键启动.bat` | `bash 一键启动.sh` |
+| 启动 | 双击 `一键启动.bat` | macOS 双击 `一键启动.command`；Linux 执行 `bash 一键启动.sh` |
 | 停止 | 双击 `停止服务.bat` | `bash 停止服务.sh` |
 | 重启 | 双击 `重启服务.bat` | `bash 重启服务.sh` |
 | 状态 | `deploy.bat status` | `bash deploy.sh status` |
