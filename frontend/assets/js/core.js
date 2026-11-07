@@ -10,8 +10,8 @@
   A.$ = function (s, root) { return (root || document).querySelector(s); };
   A.$$ = function (s, root) { return Array.prototype.slice.call((root || document).querySelectorAll(s)); };
   A.SCHED = SCHED;
-  A.PLATFORM_COLORS = { K1: '#3b74ff', K2: '#0fa8a0', K3: '#e89b1c', K4: '#7457e8', K5: '#d9484f' };
-  A.RECIPE_COLORS = { '150C2H': '#f0b45a', '180C4H': '#e98a53', '210C6H': '#c96a6f', '210C24H': '#8f5bb8' };
+  A.PLATFORM_COLORS = { 'CP-A': '#3b74ff', 'CP-B': '#0fa8a0', 'CP-C': '#e89b1c' };
+  A.RECIPE_COLORS = { '210C24H': '#d28b35', '250C24H': '#c35b58' };
   A.ICONS = {
     target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
     gantt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h10M4 12h16M4 19h7"/><rect x="3" y="3" width="4" height="4" rx="1"/><rect x="15" y="10" width="5" height="4" rx="1"/><rect x="11" y="17" width="6" height="4" rx="1"/></svg>',
@@ -22,11 +22,11 @@
     gantt: ['排产甘特', '机台与腔体时间轴'],
     inputs: ['输入与配置', '数据、机台与计划']
   };
-  A.SHEET_ORDER = ['MPS', 'EQP', '针卡', '测试flow&工时', '借机计划', 'PM计划', '约束条件', '算例参数', 'Lot明细', '周目标'];
+  A.SHEET_ORDER = ['MPS', 'EQP', '针卡', '测试flow&工时', '借机计划', 'PM计划', '约束条件'];
 
   A.state = {
     data: null, config: null, mode: 'embedded', loadError: null, result: null,
-    options: { strategy: 'weekly', borrowMode: 'reserve', bakeWindowHours: 8, setupMinutes: 5, maxDelayHours: 0 },
+    options: { strategy: 'attainment', borrowMode: 'reserve', bakeWindowHours: null, setupMinutes: 5, maxDelayHours: 0 },
     view: 'mps',
     mps: { q: '', platform: 'all' },
     gantt: { mode: 'all', range: '1d', anchor: 0, platform: 'all', q: '' },
@@ -44,8 +44,12 @@
   A.pad2 = function (n) { return n < 10 ? '0' + n : '' + n; };
   A.bar = function (v, cls) { return '<div class="bar ' + (cls || '') + '"><span style="width:' + (Math.max(0, Math.min(1, v)) * 100).toFixed(1) + '%"></span></div>'; };
   A.pfBadge = function (p) { return '<span class="platform-badge pf-' + A.esc(p) + '">' + A.esc(p) + '</span>'; };
-  A.strategyName = function (s) { return { weekly: '周目标优先', due: '交期优先', changeover: '减少换卡', spt: '短工序优先' }[s] || s; };
-  A.borrowName = function (b) { return '固定时间借机'; };
+  A.strategyName = function (s) {
+    if (s === 'attainment') return '产品 MPS 达成率均衡';
+    if (s === 'weekly') return (A.state.result && A.state.result.weeklyHasTargets) ? '周目标优先' : '周次优先';
+    return { due: '交期优先', changeover: '减少换卡', spt: '短工序优先' }[s] || s;
+  };
+  A.borrowName = function (b) { return '指定日期内安排借机'; };
 
   A.boot = function () {
     A.$$('[data-icon]').forEach(function (el) {
@@ -74,7 +78,7 @@
     var d = A.state.data, meta = d.meta || {};
     var name = A.$('#source-name'), sub = A.$('#source-meta'), status = A.$('#source-status'), note = A.$('#source-note');
     if (name) name.textContent = (meta.source || '内置算例').split(/[\\/]/).pop();
-    if (sub) sub.textContent = (meta.month || '') + ' · ' + A.num(d.lots.length) + ' lots · ' + (A.state.mode === 'server' ? '服务端数据' : '内置数据');
+    if (sub) sub.textContent = (meta.month || '') + ' · ' + A.num(d.mps.reduce(function(s,m){return s+m.mps;},0)) + ' wafer / ' + A.num(d.lots.length) + ' lots · ' + (A.state.mode === 'server' ? '服务端数据' : '内置数据');
     if (status) status.textContent = A.state.mode === 'server' ? 'Excel 数据源已连接' : '本地内置数据';
     if (note) note.textContent = A.state.mode === 'server' ? '参考数据只读' : '内置算例';
   };
@@ -138,7 +142,7 @@
         A.hideLoading();
         A.updateRunChip();
         A.renderView();
-        A.toast('排产完成：' + A.num(res.metrics.completedMonth) + ' / ' + A.num(res.metrics.totalLots) + ' lots 在月内完成 · ' + Math.round(performance.now() - t0) + ' ms');
+        A.toast('排产完成：' + A.num(res.metrics.completedWafers) + ' / ' + A.num(res.metrics.totalWafers) + ' wafer（' + A.num(res.metrics.completedLots) + ' lots）在月内完成 · ' + Math.round(performance.now() - t0) + ' ms');
       } catch (err) {
         console.error(err);
         A.hideLoading();

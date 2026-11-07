@@ -1,7 +1,7 @@
 {
   "dataSource": {
     "type": "excel",
-    "path": "data/Testing调度算例_v1.xlsx",
+    "path": "data/Testing调度算例_新版.xlsx",
     "month": "2026-09",
     "sheetMap": {
       "mps": "MPS",
@@ -10,10 +10,7 @@
       "flow": "测试flow&工时",
       "borrow": "借机计划",
       "pm": "PM计划",
-      "constraints": "约束条件",
-      "params": "算例参数",
-      "lots": "Lot明细",
-      "weekly": "周目标"
+      "constraints": "约束条件"
     },
     "headerRow": 1
   },
@@ -28,11 +25,11 @@
       "id": "EQPID",
       "currentCard": "Current ProbeCard",
       "currentRecipe": "Current Recipe",
-      "status": "status"
+      "status": "Status"
     },
     "针卡": {
       "recipe": "Recipe",
-      "cards": "ProbeCard List",
+      "cards": "ProberCard List",
       "separator": ";"
     },
     "测试flow&工时": {
@@ -57,37 +54,22 @@
       "type": "TYPE",
       "eqp": "EQPID",
       "recipe": "Constraint Recipe"
-    },
-    "Lot明细": {
-      "lotId": "LotID",
-      "ppn": "PROD",
-      "platform": "Platform",
-      "wafer": "Wafer Qty",
-      "release": "Release Time",
-      "week": "Target Week",
-      "weeklyDue": "Weekly Due",
-      "monthlyDue": "Monthly Due",
-      "priority": "Priority"
-    },
-    "周目标": {
-      "platform": "Platform",
-      "ppn": "PPN",
-      "week": "Week",
-      "start": "Week Start",
-      "end": "Week End",
-      "target": "Target Lots"
-    },
-    "算例参数": {
-      "category": "类别",
-      "parameter": "参数",
-      "object": "对象",
-      "value": "值",
-      "unit": "单位",
-      "basis": "依据"
     }
   },
   "server": {
     "host": "0.0.0.0",
     "port": 8080
+  },
+  "scheduling": {
+    "bakeResources": {
+      "machines": 7,
+      "chambers": 4
+    },
+    "platformType": {
+      "CP-A": "CP-A",
+      "CP-B": "CP-B",
+      "CP-C": "CP-C"
+    },
+    "rulesVersion": "confirmed-2026-11-06"
   }
 }

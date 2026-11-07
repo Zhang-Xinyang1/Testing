@@ -28,6 +28,14 @@ Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏�
 
 ## 使用
 
+当前仅使用 `data/Testing调度算例_新版.xlsx`。新版按 2026-11-06 逐项确认的业务规则重建：72 个 PPN、11,000 wafer、三个 CP 机台组、31 个 CP Recipe、62 种针卡类型、119 条借机，7 台 OVEN × 4 腔。每 Lot 最多 25 片；没有实际 Lot 明细时默认满 25 片加尾批，当前共 476 Lot。BAKE 每批最多 4 Lot，无额外 wafer 总数限制；升温 2h、加工 24h、降温/换 Lot 2h，占腔 28h，Lot 在第 26h 放行。
+
+规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认六种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
+
+**当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务。
+
+规则 PPT 与重跑结果在 `output/`；旧算例与旧 PPT 已删除。
+
 1. 打开“数据配置 → 生产配置 → Excel 导入”，选择 `.xlsx` 上传只读副本；静态打开页面时该入口不可用，需通过后端地址访问。
 2. 按需调整 Sheet/字段映射、机台、PM、借机、在制占用。
 3. 点击保存并排产。采用新文件原有资源时用“恢复参考配置”，该操作会清空手工覆盖，含在制快照。
@@ -40,6 +48,7 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 
 - [前端技术文档](docs/technical/前端技术文档.md)：模块、交互、排产规则、图示及现场限制。
 - [后端技术文档](docs/technical/后端技术文档.md)：上传、接口、校验、Oracle 扩展、部署与安全。
+- [运行环境与依赖说明](docs/technical/环境依赖说明.md)：Python、可选第三方库、浏览器和测试工具版本。
 - [部署说明](部署说明.md)：跨平台一键启动、离线环境、维护与故障排查。
 - [品牌素材来源](frontend/assets/brand/README.md)。
 
@@ -53,6 +62,6 @@ python3 -m py_compile backend/server.py backend/server_core.py backend/data_sour
 
 Windows 可使用 `py -3 -m unittest discover -s tests -v`。部署进程身份检查用例为 `tests/test_deployment.py`；Windows 实机双击及 Linux systemd 安装仍需在目标环境验收。
 
-JavaScript 回归用例为 `tests/scheduler.test.js`，在加载 `frontend/assets/scheduler.js` 后执行。
+JavaScript 回归用例为 `tests/scheduler.test.js`，在加载 `frontend/assets/scheduler.js` 后执行；全算例独立核验脚本为 `.artifacts/verify_metrics.js`。
 
 当前是启发式原型，并非最优解求解器。现场上线前需完成认证授权、滚动快照、真实路线、日历、并发与安全加固；详见技术文档。

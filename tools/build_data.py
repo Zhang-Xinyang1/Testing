@@ -105,93 +105,18 @@ def num(v, default=0):
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    xlsx = os.path.join(root, 'data', 'Testing调度算例_v1.xlsx')
-    if not os.path.exists(xlsx):
-        sys.exit('workbook not found: ' + xlsx)
-    sheets = read_workbook(xlsx)
-    sheet_rows = {name: clean_rows(rows)[1] for name, rows in sheets}
-    sheet_headers = {name: clean_rows(rows)[0] for name, rows in sheets}
-    sheet_summary = [{'name': name, 'rows': len(sheet_rows[name]), 'fields': sheet_headers[name]}
-                     for name, _ in sheets]
-
-    mps = [{'platform': r['Platform'], 'ppn': r['PPN'], 'mps': int(num(r['MPS']))}
-           for r in sheet_rows['MPS'] if r.get('PPN')]
-    eqp = [{'type': r['TYPE'], 'id': r['EQPID'], 'card': r['Current ProbeCard'],
-            'recipe': r['Current Recipe'], 'status': r.get('status', '')}
-           for r in sheet_rows['EQP']]
-    flows = {}
-    flow_order = {'BAKE': 90, 'QTIME1': 100}
-    for r in sheet_rows['测试flow&工时']:
-        p, step = r['PROD'], r['STEP']
-        order = int(step[2:]) if step.startswith('CP') else flow_order.get(step, 99)
-        flows.setdefault(p, []).append({'step': step, 'recipe': r['RECIPE'],
-                                        'time': num(r['TIME']), 'order': order})
-    for p in flows:
-        flows[p].sort(key=lambda x: x['order'])
-    flow_out = {p: [[x['step'], x['recipe'], x['time']] for x in ops] for p, ops in flows.items()}
-
-    cards = [{'recipe': r['Recipe'], 'cards': [x for x in r['ProbeCard List'].split(';') if x]}
-             for r in sheet_rows['针卡']]
-    pm = [{'eqp': r['EQPID'], 'early': r['Early Due'], 'due': r['Due Date'],
-           'over': r['Over Due'], 'hours': num(r['Estimated Hours'])}
-          for r in sheet_rows['PM计划']]
-    constraints = [{'type': r['TYPE'], 'eqp': r['EQPID'], 'recipe': r['Constraint Recipe']}
-                   for r in sheet_rows['约束条件']]
-    borrow = [{'date': r['DATE'], 'eqp': r['EQPID'], 'hours': num(r['借机时数'])}
-              for r in sheet_rows['借机计划']]
-    weekly = [{'platform': r['Platform'], 'ppn': r['PPN'], 'week': r['Week'],
-               'start': r['Week Start'], 'end': r['Week End'], 'target': int(num(r['Target Lots']))}
-              for r in sheet_rows['周目标']]
-    _, lot_rows = clean_rows(sheets[[n for n, _ in sheets].index('Lot明细')][1])
-    lots = [[r['LotID'], r['PROD'], r['Platform'], int(num(r['Wafer Qty'])), r['Release Time'],
-             r['Target Week'], r['Weekly Due'], r['Monthly Due'], int(num(r['Priority']))]
-            for r in lot_rows]
-    params = sheet_rows['算例参数']
-    platform_type = {r['对象']: r['值'] for r in params
-                     if r['类别'] == '映射' and r['参数'] == 'Platform对应TYPE'}
-    card_type = {r['对象']: r['值'] for r in params
-                 if r['类别'] == '资源' and r['参数'] == '物理针卡对应TYPE'}
-    for r in params:
-        if r['类别'] != '借机产生时刻':
-            continue
-        m = re.search(r'第(\d+)行', str(r['对象']))
-        if m:
-            idx = int(m.group(1)) - 2
-            if 0 <= idx < len(borrow):
-                borrow[idx]['generatedAt'] = r['值']
-    missing = sum(1 for x in borrow if not x.get('generatedAt'))
-    if missing:
-        print('WARN: borrow rows without generatedAt:', missing)
-    rules = [{'category': r['类别'], 'parameter': r['参数'], 'object': r['对象'],
-              'value': r['值'], 'unit': r.get('单位', ''), 'basis': r.get('依据', '')}
-             for r in params
-             if r['类别'] != '借机产生时刻'
-             and not (r['类别'] == '资源' and r['参数'] == '物理针卡对应TYPE')]
-    data = {
-        'meta': {'month': '2026-09', 'start': '2026-09-01T00:00:00+08:00',
-                 'days': 30, 'source': os.path.basename(xlsx),
-                 'generatedAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
-        'mps': mps, 'eqp': eqp, 'flows': flow_out, 'recipes': cards,
-        'pm': pm, 'borrow': borrow, 'weekly': weekly, 'constraints': constraints,
-        'lotFields': sheet_headers['Lot明细'], 'lots': lots,
-        'platformType': platform_type, 'cardType': card_type,
-        'rules': rules, 'sheetSummary': sheet_summary,
-    }
+    sys.path.insert(0, os.path.join(root, 'backend'))
+    from server_core import build_payload, load_config
+    cfg = load_config()
+    if len(sys.argv) > 1:
+        cfg['dataSource']['path'] = os.path.abspath(sys.argv[1])
+    data = build_payload(config=cfg)
+    data['meta']['serverMode'] = False
     out = os.path.join(root, 'frontend', 'assets', 'data.js')
-    text = ('/* Auto-generated from %s. Do not edit by hand. */\nwindow.DEMO_DATA = %s;\n'
-            % (os.path.basename(xlsx), json.dumps(data, ensure_ascii=False, separators=(',', ':'))))
     with open(out, 'w', encoding='utf-8') as f:
-        f.write(text)
-    print('wrote', out, '%.1f KB' % (len(text.encode('utf-8')) / 1024))
-    print('lots', len(lots), 'mps', len(mps), 'flows', len(flow_out), 'pm', len(pm),
-          'borrow', len(borrow), 'weekly', len(weekly), 'rules', len(rules))
-    print('sheets', [(s['name'], s['rows']) for s in sheet_summary])
+        f.write('/* Generated from confirmed business rules. */\nwindow.DEMO_DATA = ' + json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ';\n')
+    print('wrote', out, 'lots', len(data['lots']), 'products', len(data['mps']))
 
 
 if __name__ == '__main__':
     main()
-def num(v, default=0):
-    try:
-        return float(v)
-    except Exception:
-        return default

@@ -20,7 +20,7 @@ class DiagnosticsTests(unittest.TestCase):
         task = {'lotId': 'L', 'step': 'CP1', 'machine': 'M', 'card': 'C', 'start': 1, 'end': 10}
         body['result']['cpTasks'] = [task, dict(task, lotId='B')]
         codes = {f['code'] for f in inspect_run(body)[0]}
-        self.assertTrue({'R01', 'R02', 'R06', 'P01'} <= codes)
+        self.assertTrue({'R01', 'R06', 'P01'} <= codes)
 
     def test_history_and_determinism(self):
         with tempfile.TemporaryDirectory() as root:

@@ -99,7 +99,8 @@ function validationHTML() {
     var d = A.state.data, r = A.state.result;
     var checks = [];
     var mpsSum = (d.mps || []).reduce(function (a, x) { return a + x.mps; }, 0);
-    checks.push([mpsSum === d.lots.length, 'MPS 需求与 Lot 数一致：' + num(mpsSum) + ' / ' + num(d.lots.length) + ' lots']);
+    var waferSum=d.lots.reduce(function(s,l){return s+l[3];},0);
+    checks.push([mpsSum === waferSum && d.lots.every(function(l){return Number.isInteger(l[3])&&l[3]>=1&&l[3]<=25;}), 'MPS 与 Lot wafer 合计一致：' + num(mpsSum) + ' / ' + num(waferSum) + ' wafer，拆为 ' + num(d.lots.length) + ' Lot（每 Lot 最多25片）']);
     checks.push([Object.keys(d.flows).length === (d.mps || []).length, '工艺覆盖：' + Object.keys(d.flows).length + ' 个 PROD / ' + (d.mps || []).length + ' 个 PPN']);
     var flowRows = Object.keys(d.flows).reduce(function (a, p) { return a + d.flows[p].length; }, 0);
     checks.push([flowRows > 0, '工艺记录：' + flowRows + ' 行，展开 ' + num(r.metrics.cpOps) + ' 道 CP 工序']);
@@ -107,12 +108,12 @@ function validationHTML() {
     checks.push([noCards === 0, 'Recipe 与针卡：' + (d.recipes || []).length + ' 个 Recipe，' + noCards + ' 个无候选针卡']);
     var cards = {};
     (d.recipes || []).forEach(function (x) { x.cards.forEach(function (c) { cards[c] = 1; }); });
-    checks.push([true, '物理针卡：' + Object.keys(cards).length + ' 张，按 TYPE 互斥占用']);
+    checks.push([true, '针卡类型：' + Object.keys(cards).length + ' 种，实物数量充足，可跨机并行']);
     checks.push([r.metrics.pmInWindow === r.metrics.pmCount, 'PM 窗口：' + r.metrics.pmInWindow + ' / ' + r.metrics.pmCount + ' 次在允许窗口内']);
     var maxBatchLots = Math.max.apply(null, r.batches.map(function (b) { return b.lots.length; }).concat([0]));
-    checks.push([maxBatchLots <= 4 && r.metrics.maxBatchWafers <= 50, 'BAKE 组批：最大 ' + maxBatchLots + ' lots / ' + r.metrics.maxBatchWafers + ' 片（上限 4 / 50）']);
+    checks.push([maxBatchLots <= 4, 'BAKE 组批：最大 ' + maxBatchLots + ' lots（每腔上限 4 Lot，无 wafer 限制）']);
     checks.push([r.metrics.borrowCancelRate <= 0.1, '借机取消率：' + A.pct(r.metrics.borrowCancelRate, 1) + '（阈值 10%）']);
-    checks.push([r.metrics.completedMonth >= mpsSum, '算法完成 / Excel MPS：' + num(r.metrics.completedMonth) + ' / ' + num(mpsSum) + ' lots；在制另列 ' + num(r.metrics.wipLots || 0) + ' lots']);
+    checks.push([r.metrics.completedWafers >= mpsSum, '算法完成 / Excel MPS：' + num(r.metrics.completedWafers) + ' / ' + num(mpsSum) + ' wafer；在制另列 ' + num(r.metrics.wipLots || 0) + ' lots']);
     return checks.map(function (c) {
       return '<div class="check-item"><span class="check-icon ' + (c[0] ? '' : 'warn') + '">' + (c[0] ? '✓' : '!') + '</span><span>' + esc(c[1]) + '</span></div>';
     }).join('');

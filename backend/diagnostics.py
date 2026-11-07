@@ -9,7 +9,7 @@ import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 
-VERSION = 'diag-1'
+VERSION = 'diag-2-wafer'
 LOCK = threading.Lock()
 CATALOG = {
     'R01': ('机台重叠', '已确认', '查看冲突时段，核对资源占用。'),
@@ -18,7 +18,9 @@ CATALOG = {
     'R04': ('PM 越窗', '已确认', '检查维护窗口和连续时长。'),
     'R05': ('借机冲突', '已确认', '避开 PM、在制占用和其他借机。'),
     'R06': ('在制被重排', '已确认', '在制 Lot 应整批排除。'),
-    'R07': ('BAKE 超容量', '已确认', '每批不超过 4 lot、50 片。'),
+    'R07': ('BAKE 超容量', '已确认', '每腔每批不超过 4 lot，Recipe 一致。'),
+    'R08': ('禁加工或资源资格异常', '已确认', '核对 RUN、机台组、候选针卡和禁加工规则。'),
+    'R09': ('BAKE 时间异常', '已确认', '升温 2h、Recipe 加工 24h、降温 2h；加工结束放行 Lot，降温结束释放腔体。'),
     'C01': ('无可用资源', '待核查', '核对工艺、机台 TYPE 和候选针卡。'),
     'C02': ('RUN 缺快照', '已确认', '补充在制资源占用和预计释放时间。'),
     'P01': ('月度未达成', '已确认', '当前方案存在缺口，不等于已证明无解。'),
@@ -83,35 +85,46 @@ def inspect_run(body):
             prefix = 'chamber:' if w.get('chamber') else 'machine:'
             reserve(prefix + resource, ms(w['start']), ms(w['end']), w['lotId'], 'wip')
         card = w.get('card') or eqps.get(w.get('eqp'), {}).get('card')
-        if card and resource:
+        if False and card and resource:
             reserve('card:' + card, ms(w['start']), ms(w['end']), w['lotId'], 'wip')
+    lot_products={l['id']:l['prod'] for l in result.get('lots', [])}
+    products={m['ppn']:m for m in data.get('mps', [])}
+    releases={r[0]:r[4] for r in data.get('lots', [])}
+    wafer_by_lot={r[0]:r[3] for r in data.get('lots', [])}
     by_lot = {}
     for t in tasks:
         start, end = t.get('blockStart', t['start']), t['end']
         if t['lotId'] in excluded:
             add('R06', t['lotId'])
         reserve('machine:' + t['machine'], start, end, t['lotId'] + '/' + t['step'], 'cp')
-        reserve('card:' + t['card'], start, end, t['lotId'] + '/' + t['step'], 'cp')
+        machine=eqps.get(t['machine'], {})
+        product=products.get(t.get('prod') or lot_products.get(t['lotId']))
+        allowed=re.split(r'[;,，；/|]+', product.get('platform', '')) if product else []
+        cards=next((r['cards'] for r in data.get('recipes', []) if r['recipe']==t.get('recipe')), [])
+        denied=any(c['eqp']==t['machine'] and c['recipe']==t.get('recipe') for c in data.get('constraints', []))
+        if machine.get('status')!='RUN' or (allowed and machine.get('type') not in allowed) or (cards and t['card'] not in cards) or denied:
+            add('R08', t['lotId']+'/'+t['step'])
         by_lot.setdefault(t['lotId'], []).append(t)
     for lot, steps in by_lot.items():
-        steps.sort(key=lambda task: int(task['step'][2:]) if task['step'].startswith('CP') and task['step'][2:].isdigit() else 0)
+        steps.sort(key=lambda task: task.get('opIndex', task['start']))
         for a, b in zip(steps, steps[1:]):
             if b['start'] < a['end']:
                 add('R03', lot)
     for b in batches:
-        if len(b['lots']) > 4 or b['wafers'] > 50:
+        if len(b['lots']) > 4:
             add('R07', b['id'])
         reserve('chamber:' + b['chamber'], b['start'], b['end'], b['id'], 'bake')
-        for lid in b['lots']:
+        if (b.get('processStart', 0)-b['start'] != 7200000 or b.get('processEnd', 0)-b.get('processStart', 0) != 86400000 or b['end']-b.get('processEnd', 0) != 7200000):
+            add('R09', b['id'])
+        for item in b['lots']:
+            lid = item['id'] if isinstance(item, dict) else item
             if lid in excluded:
                 add('R06', lid)
-            if by_lot.get(lid) and max(t['end'] for t in by_lot[lid]) > b['start']:
-                add('R03', lid)
     for p in result.get('pmRecords', []):
         if p['start'] < ms(p['early']) or p['end'] > ms(p['over']) + 86400000:
             add('R04', p['id'])
         for resource in p['resources']:
-            reserve(('chamber:' if resource.startswith('BAKE-') else 'machine:') + resource,
+            reserve(('machine:' if resource in eqps and 'OVEN' not in eqps[resource]['type'].upper() else 'chamber:') + resource,
                     p['start'], p['end'], p['id'], 'pm')
     for b in result.get('borrows', []):
         if b['status'] == 'cancel':
@@ -129,13 +142,23 @@ def inspect_run(body):
         if lot.get('unscheduledReason'):
             add('C01', lot['id'] + '：' + lot['unscheduledReason'])
         if lot.get('complete') is not None and lot['complete'] <= month_end:
-            completed[lot['prod']] = completed.get(lot['prod'], 0) + 1
-        wait = sum(op[2] for op in flows.get(lot['prod'], []) if op[0] == 'QTIME1') * 60000
-        if lot.get('bakeEnd') is not None and lot.get('complete') is not None and lot['complete'] < lot['bakeEnd'] + wait:
-            add('R03', lot['id'] + '：QTIME 不足')
-    for e in eqps.values():
-        if e.get('status') == 'RUN' and not any(w.get('eqp') == e['id'] for w in wip):
-            add('C02', e['id'])
+            completed[lot['prod']] = completed.get(lot['prod'], 0) + wafer_by_lot.get(lot['id'], lot.get('wafer', 0))
+        route=lot.get('routeTasks', [])
+        expected=flows.get(lot['prod'], [])
+        if route and len(route)!=len(expected):
+            add('R03', lot['id']+'：路线工序数量不符')
+        previous=ms(releases.get(lot['id'], data['meta']['start']))
+        for index, task in enumerate(route):
+            if index>=len(expected):
+                break
+            op=expected[index]
+            if task['step']!=op[0] or task['recipe']!=op[1] or task['start']<previous:
+                add('R03', lot['id']+'：工序顺序或就绪时间异常')
+            if op[0]=='QTIME1' and task['end']-task['start'] != int(op[1])*60000:
+                add('R03', lot['id']+'：QTIME 不足')
+            previous=task['end']
+        if route and lot.get('complete') != previous:
+            add('R03', lot['id']+'：末工序与最终完成时间不一致')
     for m in data.get('mps', []):
         done = completed.get(m['ppn'], 0)
         if done < m['mps']:
@@ -172,16 +195,16 @@ def record_run(config_path, body):
     findings, completed = inspect_run(body)
     with LOCK:
         previous = history(config_path)
-        last = previous[0] if previous else None
+        last = next((r for r in previous if r.get('unit') == 'wafer'), None)
         if completed is not None and last and last.get('completed') is not None and completed < last['completed']:
-            findings.append({'code': 'P02', 'title': CATALOG['P02'][0], 'certainty': '待核查', 'action': CATALOG['P02'][2], 'count': 1, 'details': ['比上次减少 %d lot' % (last['completed'] - completed)]})
+            findings.append({'code': 'P02', 'title': CATALOG['P02'][0], 'certainty': '待核查', 'action': CATALOG['P02'][2], 'count': 1, 'details': ['比上次减少 %d wafer' % (last['completed'] - completed)]})
         same = next((r for r in previous if r['inputHash'] == input_hash and r['version'] == VERSION and not r.get('failed')), None)
         if same and completed is not None and same['outputHash'] != output_hash:
             findings.append({'code': 'S03', 'title': CATALOG['S03'][0], 'certainty': '待核查', 'action': CATALOG['S03'][2], 'count': 1, 'details': ['与运行 ' + same['id'] + ' 比较']})
         now = datetime.now(timezone(timedelta(hours=8)))
         run_id = now.strftime('%Y%m%dT%H%M%S%f') + '-' + uuid.uuid4().hex[:8]
         codes = [f['code'] for f in findings]
-        report = {'id': run_id, 'version': VERSION, 'time': now.isoformat(), 'completed': completed,
+        report = {'id': run_id, 'version': VERSION, 'time': now.isoformat(), 'completed': completed, 'unit': 'wafer',
                   'failed': bool(body.get('error')), 'inputHash': input_hash, 'outputHash': output_hash,
                   'findings': findings, 'trigger': body.get('trigger', '手动重排'),
                   'comparison': None if not last else {'previous': last['id'], 'sameInput': last['inputHash'] == input_hash,

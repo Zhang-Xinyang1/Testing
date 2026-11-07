@@ -12,6 +12,11 @@ from build_data import read_workbook, clean_rows, num  # noqa: E402
 DEFAULT_CONFIG = os.path.join(ROOT, 'config', 'config.json')
 
 
+def route_patterns():
+    with open(os.path.join(ROOT, 'config', 'route_patterns.json'), encoding='utf-8') as f:
+        return json.load(f)
+
+
 def load_config(path=DEFAULT_CONFIG):
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
@@ -81,12 +86,18 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         name = smap.get(key)
         if not name:
             return [], []
-        header, rows = rows_for(wb, name, src.get('headerRow', 1))
+        try:
+            header, rows = rows_for(wb, name, src.get('headerRow', 1))
+        except KeyError:
+            # Seven-sheet deployments omit the optional helper sheets.
+            if key in ('params', 'lots', 'weekly', 'wip'):
+                return [], []
+            raise
         required = {
             'mps': ('platform', 'ppn', 'mps'), 'eqp': ('type', 'id'),
             'cards': ('recipe', 'cards'), 'flow': ('prod', 'step', 'recipe', 'time'),
             'borrow': ('date', 'eqp', 'hours'), 'pm': ('eqp', 'early', 'due', 'over', 'hours'),
-            'lots': ('lotId', 'ppn'), 'wip': ('lotId',),
+            'lots': ('lotId', 'ppn', 'wafer'), 'wip': ('lotId',),
         }
         for logical in required.get(key, ()):
             column = fm.get(name, {}).get(logical)
@@ -112,8 +123,11 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         ppn = str(get(r, 'mps', 'ppn', '')).strip()
         if not ppn:
             continue
+        quantity = getn(r, 'mps', 'mps', float('nan'))
+        if not math.isfinite(quantity) or quantity < 0 or quantity != int(quantity):
+            raise ValueError('MPS 必须为非负整数 wafer 数：' + ppn)
         mps.append({'platform': str(get(r, 'mps', 'platform', '')).strip(),
-                    'ppn': ppn, 'mps': int(getn(r, 'mps', 'mps', 0))})
+                    'ppn': ppn, 'mps': int(quantity)})
     prod_platform = {m['ppn']: m['platform'] for m in mps}
 
     # ---- EQP ----
@@ -124,7 +138,10 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
                     'id': str(get(r, 'eqp', 'id', '')).strip(),
                     'card': str(get(r, 'eqp', 'currentCard', '')).strip(),
                     'recipe': str(get(r, 'eqp', 'currentRecipe', '')).strip(),
-                    'status': str(get(r, 'eqp', 'status', '')).strip()})
+                    'status': str(get(r, 'eqp', 'status', '') or r.get('Status', '') or r.get('status', '')).strip().upper()})
+
+    # EQP's Current ProbeCard is the authoritative physical-card -> TYPE mapping.
+    card_type = {e['card']: e['type'] for e in eqp if e.get('card')}
 
     # ---- Probe cards ----
     _, card_rows = rows_of('cards')
@@ -132,7 +149,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     cards = []
     for r in card_rows:
         recipe = str(get(r, 'cards', 'recipe', '')).strip()
-        raw = str(get(r, 'cards', 'cards', ''))
+        raw = str(get(r, 'cards', 'cards', '') or r.get('ProberCard List', '') or r.get('ProbeCard List', ''))
         cards.append({'recipe': recipe, 'cards': [x.strip() for x in raw.split(sep) if x.strip()]})
 
     # ---- Flow ----
@@ -144,11 +161,24 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         step = str(get(r, 'flow', 'step', '')).strip()
         if not prod or not step:
             continue
-        order = int(step[2:]) if step.startswith('CP') and step[2:].isdigit() else flow_order.get(step, 99)
+        order = len(fl.get(prod, []))
+        recipe = str(get(r, 'flow', 'recipe', '')).strip()
+        duration = getn(r, 'flow', 'time', 0)
+        if step == 'BAKE':
+            match = re.fullmatch(r'(210|250)C(24)H', recipe)
+            if not match:
+                raise ValueError('BAKE Recipe 仅允许 210C24H 或 250C24H：' + prod)
+            duration = int(match.group(2))
+        elif step == 'QTIME1':
+            if recipe not in ('7', '14', '28'):
+                raise ValueError('QTIME1 Recipe 仅允许 7、14、28：' + prod)
+            duration = int(recipe)
+        elif step not in ('CP1', 'CP2', 'CP3', 'CP4') or duration <= 0:
+            raise ValueError('未知 STEP 或无效 CP 工时：' + prod + '/' + step)
         fl.setdefault(prod, []).append({
             'step': step,
-            'recipe': str(get(r, 'flow', 'recipe', '')).strip(),
-            'time': getn(r, 'flow', 'time', 0),
+            'recipe': recipe,
+            'time': duration,
             'order': order,
         })
     for p in fl:
@@ -183,20 +213,20 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     def pget(r, key, default=''):
         return r.get(field('params', key, default), default)
 
-    platform_type, card_type = {}, {}
+    platform_type = {}
     for r in params:
         cat, par = str(pget(r, 'category')), str(pget(r, 'parameter'))
         if cat == '映射' and par == 'Platform对应TYPE':
             platform_type[str(pget(r, 'object'))] = str(pget(r, 'value'))
         if cat == '资源' and par == '物理针卡对应TYPE':
             card_type[str(pget(r, 'object'))] = str(pget(r, 'value'))
-    for k in ['K1', 'K2', 'K3', 'K4', 'K5']:
-        platform_type.setdefault(k, 'E' + k[1:])
+    for machine in eqp:
+        if 'OVEN' not in machine['type'].upper():
+            platform_type[machine['type']] = machine['type']
     for r in cards:
         for cid in r['cards']:
             if cid not in card_type:
-                mt = re.search(r'W(\d)10A', cid)
-                card_type[cid] = ('E' + mt.group(1)) if mt else ''
+                card_type[cid] = '共享类型'
 
     for r in params:
         if str(pget(r, 'category')) != '借机产生时刻':
@@ -206,9 +236,6 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             idx = int(m.group(1)) - 2
             if 0 <= idx < len(borrow):
                 borrow[idx]['generatedAt'] = str(pget(r, 'value'))
-    for b in borrow:
-        if not b.get('generatedAt'):
-            b['generatedAt'] = str(b['date']) + 'T08:00:00+08:00'
 
     rules = [{'category': str(pget(r, 'category')), 'parameter': str(pget(r, 'parameter')),
               'object': str(pget(r, 'object')), 'value': str(pget(r, 'value')),
@@ -235,24 +262,26 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             lots.append([
                 lid, prod,
                 str(get(r, 'lots', 'platform', '')).strip() or prod_platform.get(prod, ''),
-                int(getn(r, 'lots', 'wafer', 25)),
+                getn(r, 'lots', 'wafer', 0),
                 get(r, 'lots', 'release', '') or month_start,
                 str(get(r, 'lots', 'week', '')).strip() or 'W1',
-                get(r, 'lots', 'weeklyDue', '') or (start_dt + timedelta(days=7)).strftime('%Y-%m-%d'),
+                get(r, 'lots', 'weeklyDue', '') or (start_dt + timedelta(days=6)).strftime('%Y-%m-%d'),
                 get(r, 'lots', 'monthlyDue', '') or next_month,
                 int(getn(r, 'lots', 'priority', 1)),
             ])
     else:
         for m in mps:
-            for i in range(1, m['mps'] + 1):
-                lots.append(['%s-L%04d' % (m['ppn'], i), m['ppn'], m['platform'], 25,
-                             month_start, 'W1', (start_dt + timedelta(days=7)).strftime('%Y-%m-%d'),
+            # This is a fallback assumption, not a restriction on actual Lot sizes.
+            for offset in range(0, m['mps'], 25):
+                lots.append(['%s-L%04d' % (m['ppn'], offset // 25 + 1), m['ppn'], m['platform'],
+                             min(25, m['mps'] - offset),
+                             month_start, 'W1', (start_dt + timedelta(days=6)).strftime('%Y-%m-%d'),
                              next_month, 1])
 
     summary = []
     for name, rows in wb:
-        header, _ = clean_rows(rows)
-        summary.append({'name': name, 'rows': max(0, len(rows) - 1), 'fields': header})
+        header, cleaned = clean_rows(rows)
+        summary.append({'name': name, 'rows': len(cleaned), 'fields': header})
 
     meta = {
         'month': month,
@@ -262,6 +291,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         'configPath': os.path.relpath(config_path, ROOT),
         'loadedAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'serverMode': True,
+        'mpsUnit': 'wafer',
+        'lotSizing': 'actual' if lot_rows else 'default-25-tail',
     }
     payload = {
         'meta': meta, 'mps': mps, 'eqp': eqp, 'flows': flows, 'recipes': cards,
@@ -278,7 +309,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     _, wip_rows = rows_of('wip')
     wip = [{key: get(r, 'wip', key, '') for key in ('lotId', 'eqp', 'chamber', 'card', 'start', 'end')} for r in wip_rows]
     payload['wip'] = overrides.get('wip', wip)
-    payload['bakeResources'] = overrides.get('bakeResources', {'machines': 7, 'chambers': 4})
+    ovens = [e for e in payload['eqp'] if 'OVEN' in e['type'].upper()]
+    payload['bakeResources'] = {'machines': len(ovens), 'chambers': 4, 'ids': [e['id'] for e in ovens]} if ovens else overrides.get('bakeResources', {'machines': 7, 'chambers': 4})
+    payload['schemaVersion'] = 'confirmed-2026-11-06'
     validate_schedule(payload)
     payload['planIssues'] = calendar_issues(payload)
     return payload
@@ -299,31 +332,48 @@ def validate_schedule(data):
 
     for key in ('eqp', 'pm', 'borrow', 'wip'):
         require(isinstance(data[key], list), key + ' 必须为记录列表')
+    for recipe in data['recipes']:
+        require(1 <= len(recipe['cards']) <= 4,
+                'Recipe 候选针卡类型必须为 1 至 4 种：' + recipe['recipe'])
+        require(len(set(recipe['cards'])) == len(recipe['cards']),
+                'Recipe 候选针卡不能重复：' + recipe['recipe'])
     ids = [e['id'] for e in data['eqp']]
-    require(all(isinstance(x, str) and x.strip() and not x.startswith('BAKE-') for x in ids)
-            and len(set(ids)) == len(ids), 'CP 机台编号不能为空、重复或使用 BAKE- 前缀')
+    require(all(isinstance(x, str) and x.strip()  for x in ids)
+            and len(set(ids)) == len(ids), '设备编号不能为空或重复')
     machines = {e['id']: e for e in data['eqp']}
-    installed = set()
     for e in data['eqp']:
         require(bool(e.get('type')), '机台 TYPE 不能为空')
-        require(e.get('status', '') in ('', 'RUN', 'LOST'), '机台状态仅允许空白、RUN、LOST')
-        card = e.get('card', '')
-        if card:
-            require(card not in installed, '一张针卡不能同时安装在两台机台：' + card)
-            require(data['cardType'].get(card) == e['type'], '安装针卡 TYPE 与机台不符：' + card)
-            installed.add(card)
     bake = data['bakeResources']
     for key in ('machines', 'chambers'):
         require(type(bake.get(key)) is int and 1 <= bake[key] <= 100, 'BAKE 数量和腔体数必须为 1 至 100 的整数')
-    bake_ids = {'BAKE-%02d' % n for n in range(1, bake['machines'] + 1)}
+    bake_ids = set(bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)]))
     chamber_ids = {e + '-C%d' % c for e in bake_ids for c in range(1, bake['chambers'] + 1)}
     lots = {r[0]: r for r in data['lots']}
     require(len(lots) == len(data['lots']), 'LotID 不能重复')
     require(bool(data['mps']), 'MPS 表没有有效数据，请检查字段映射')
     require(len({m['ppn'] for m in data['mps']}) == len(data['mps']), 'MPS 产品编号不能重复')
+    wafer_totals = {}
+    product_ids = {m['ppn'] for m in data['mps']}
+    for lot in data['lots']:
+        require(lot[1] in product_ids, 'Lot 引用未知 PPN：' + lot[0])
+        require(number(lot[3]) and lot[3] == int(lot[3]) and 1 <= lot[3] <= 25,
+                'Lot 的 wafer 片数必须为 1 至 25 的整数：' + lot[0])
+        wafer_totals[lot[1]] = wafer_totals.get(lot[1], 0) + lot[3]
     for m in data['mps']:
-        require(number(m['mps']) and m['mps'] >= 0, 'MPS 必须为非负数')
-        require(m['platform'] in data['platformType'], 'Platform 未配置 TYPE 映射：' + m['platform'])
+        require(number(m['mps']) and m['mps'] == int(m['mps']) and m['mps'] >= 0,
+                'MPS 必须为非负整数 wafer 数')
+        require(wafer_totals.get(m['ppn'], 0) == m['mps'],
+                '产品 Lot 的 wafer 合计必须等于 MPS：' + m['ppn'])
+        groups = [v.strip() for v in re.split(r'[;,，；/|]+', m['platform']) if v.strip()]
+        cp_types = {e['type'] for e in data['eqp'] if 'OVEN' not in e['type'].upper()}
+        require(bool(groups) and set(groups) <= cp_types, 'Platform 必须直接匹配 EQP.TYPE：' + m['platform'])
+        require(m['ppn'] in data['flows'], '产品缺少路线：' + m['ppn'])
+        steps = [op[0] for op in data['flows'][m['ppn']]]
+        require(steps in route_patterns(),
+                '产品 STEP 顺序不属于已确认的六种路线：' + m['ppn'] + ' / ' + ','.join(steps))
+        for op in data['flows'][m['ppn']]:
+            if op[0].startswith('CP'):
+                require(any(r['recipe'] == op[1] for r in data['recipes']), 'CP Recipe 缺少候选针卡：' + op[1])
     seen = set()
     occupied, card_busy = {}, {}
     for w in data['wip']:
@@ -345,10 +395,8 @@ def validate_schedule(data):
         else:
             require(not w.get('chamber'), 'CP 在制不应填写 BAKE 腔体')
             card = w.get('card') or machines[eqp].get('card')
-            require(bool(card) and data['cardType'].get(card) == machines[eqp]['type'], 'CP 在制需要有效的同 TYPE 针卡')
+            require(bool(card), 'CP 在制需要针卡类型')
             w['card'] = card
-            for a, b in card_busy.get(card, []):
-                require(not (start < b and end > a), '在制针卡重复占用：' + card)
             card_busy.setdefault(card, []).append((start, end))
         for a, b, other in occupied.get(resource, []):
             if start < b and end > a:
@@ -360,13 +408,14 @@ def validate_schedule(data):
             for a, b, lid in entries:
                 groups.setdefault((a, b), []).append(lid)
             for group in groups.values():
-                require(len(group) <= 4 and sum(lots[lid][3] for lid in group) <= 50, 'BAKE 在制组批超过 4 lot 或 50 片')
+                require(len(group) <= 4, 'BAKE 在制组批超过 4 lot')
     for key in ('borrow', 'pm'):
         for p in data[key]:
             require(p['eqp'] in (set(ids) if key == 'borrow' else set(ids) | bake_ids), '计划引用未知机台：' + p['eqp'])
             require(number(p['hours']) and 0 < p['hours'] <= 744, '计划时长必须大于 0 且不超过 744 小时')
             if key == 'borrow':
-                date(p.get('start') or p.get('generatedAt') or p['date'])
+                require(0.6 <= p['hours'] <= 24, '借机时数必须为 0.6 至 24 小时')
+                date(p.get('start') or p['date'])
             else:
                 early, due, over = [date(p[k]).date() for k in ('early', 'due', 'over')]
                 require(early <= due <= over, 'PM 日期必须满足 Early ≤ Due ≤ Over')
@@ -399,14 +448,14 @@ def calendar_issues(data):
     for resource, spans in blocked.items():
         pm_blocked[resource] = spans.copy()
     for e in data['eqp']:
-        missing = e.get('status') == 'RUN' and not any(w.get('eqp') == e['id'] for w in data['wip'])
+        missing = False
         if missing or e.get('status') == 'LOST':
             blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
         if missing:
             pm_blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
     for index, p in enumerate(data['pm']):
         resources = [p['eqp']]
-        if p['eqp'].startswith('BAKE-'):
+        if p['eqp'] in set(data['bakeResources'].get('ids', [])) or p['eqp'].startswith('BAKE-'):
             resources = [p['eqp'] + '-C%d' % i for i in range(1, data['bakeResources']['chambers'] + 1)]
         spans = [span for resource in resources for span in pm_blocked.get(resource, [])]
         early = date(p['early'])
@@ -421,10 +470,11 @@ def calendar_issues(data):
             blocked.setdefault(resource, []).append(span)
             pm_blocked.setdefault(resource, []).append(span)
     for index, b in enumerate(data['borrow']):
-        start = date(b.get('start') or b.get('generatedAt') or b['date'] + 'T08:00:00+08:00')
-        span = (start, start + timedelta(hours=b['hours']))
-        if any(overlaps(span, other) for other in blocked.get(b['eqp'], [])):
-            issues.append('借机第 %d 条 %s：与 PM、在制、不可用状态或其他借机冲突，请换同 TYPE 机台' % (index + 1, b['eqp']))
-        else:
-            blocked.setdefault(b['eqp'], []).append(span)
+        first = date(b.get('start') or b['date'])
+        duration = timedelta(hours=b['hours'])
+        latest = first if b.get('start') else date(b['date']) + timedelta(days=1) - timedelta(microseconds=1)
+        start = gap(blocked.get(b['eqp'], []), first, duration, latest)
+        if start is not None:
+            blocked.setdefault(b['eqp'], []).append((start, start + duration))
+        # Unavailable requests remain eligible for a production-preserving suggestion.
     return issues

@@ -30,26 +30,15 @@
     var lot = A.state.result.lots.filter(function (l) { return l.id === lotId; })[0];
     if (!lot) return;
     var html = '<div class="detail-hero"><div class="detail-hero-top">' + pfBadge(lot.platform) + '<h3>' + esc(lot.id) + '</h3>' + lotStatusPill(lot.status) + '</div>' +
-      '<p>' + esc(lot.prod) + ' · ' + lot.wafer + ' pcs · 目标 ' + lot.week + ' · MPS 月结 ' + esc(lot.monthlyDue) + '</p>' +
-      '<div class="detail-stats"><div class="detail-stat"><span>晶圆</span><b>' + lot.wafer + '</b></div>' +
+      '<p>' + esc(lot.prod) + ' · ' + lot.wafer + ' wafer · MPS 月结 ' + esc(lot.monthlyDue) + '</p>' +
+      '<div class="detail-stats"><div class="detail-stat"><span>路线工序数</span><b>' + lot.ops.length + '</b></div>' +
         '<div class="detail-stat"><span>CP 完成</span><b>' + fmtDateTime(lot.cpEnd) + '</b></div>' +
         '<div class="detail-stat"><span>完工</span><b>' + fmtDateTime(lot.complete) + '</b></div></div></div>';
-    html += '<div class="timeline"><div class="timeline-title"><span>工艺路线</span><span class="muted tiny">' + lot.cpTasks.length + ' 道 CP + BAKE + QTIME1</span></div>';
-    lot.cpTasks.forEach(function (t) {
-      html += '<div class="timeline-item"><div class="timeline-dot">' + esc(t.step) + '</div><div class="timeline-main">' +
-        '<b>' + esc(t.machine) + ' · ' + esc(t.recipe) + '</b>' +
-        '<span>针卡 ' + esc(t.card) + ' · 加工 ' + (t.duration / 60000).toFixed(0) + ' min' + (t.setup ? ' · 换卡 ' + (t.setup / 60000).toFixed(0) + ' min' : '') + '</span>' +
-        '<div class="timeline-time">' + fmtDateTime(t.start) + ' → ' + A.SCHED.fmt(t.end, false) + '</div></div></div>';
+    html += '<div class="timeline"><div class="timeline-title">实际工序顺序</div>';
+    (lot.routeTasks||[]).forEach(function(t){
+      html += '<div class="timeline-item"><div class="timeline-dot">'+esc(t.step)+'</div><div class="timeline-main"><b>'+esc(t.recipe)+'</b><span>'+esc(t.machine||t.chamber||'不占资源等待')+(t.card?' · 针卡类型 '+esc(t.card):'')+(t.setup?' · 换卡 5 min':'')+'</span><div class="timeline-time">'+fmtDateTime(t.start)+' → '+fmtDateTime(t.end)+(t.resourceEnd?' · 腔体释放 '+fmtDateTime(t.resourceEnd):'')+'</div></div></div>';
     });
-    if (lot.batch) {
-      html += '<div class="timeline-item"><div class="timeline-dot bake">BAKE</div><div class="timeline-main">' +
-        '<b>' + esc(lot.batch.chamber) + ' · ' + esc(lot.batch.recipe) + '</b>' +
-        '<span>组批 ' + lot.batch.lots.length + ' lots / ' + lot.batch.wafers + ' 片 · 批号 ' + esc(lot.batch.id) + '</span>' +
-        '<div class="timeline-time">' + fmtDateTime(lot.batch.start) + ' → ' + fmtDateTime(lot.batch.end) + '</div></div></div>';
-    }
-    var qt = lot.qtOp ? lot.qtOp[2] : 0;
-    html += '<div class="timeline-item"><div class="timeline-dot qt">QTIME</div><div class="timeline-main"><b>等待 ' + qt + ' min</b>' +
-      '<span>不占 CP / BAKE 资源，等待完成后计为路线完成。</span><div class="timeline-time">' + fmtDateTime(lot.bakeEnd) + ' → ' + fmtDateTime(lot.complete) + '</div></div></div></div>';
+    html += '</div>';
     openDrawer('LOT DETAIL', lot.id, html);
   }
 
@@ -59,7 +48,7 @@
     var route = A.state.data.flows[ppn] || [];
     var html = '<div class="detail-hero"><div class="detail-hero-top">' + pfBadge(row.platform) + '<h3>' + esc(ppn) + '</h3>' +
       (row.status === '达成' ? '<span class="pill green">达成</span>' : '<span class="pill red">缺口 ' + (-row.delta) + '</span>') + '</div>' +
-      '<p>Excel MPS 目标 ' + num(row.mps) + ' lots · 算法完成 ' + num(row.completed) + ' lots</p>' +
+      '<p>Excel MPS 目标 ' + num(row.mps) + ' wafer · 算法完成 ' + num(row.completed) + ' wafer</p>' +
       '<div class="detail-stats"><div class="detail-stat"><span>MPS</span><b>' + num(row.mps) + '</b></div>' +
         '<div class="detail-stat"><span>算法完成</span><b>' + num(row.completed) + '</b></div>' +
         '<div class="detail-stat"><span>达成率</span><b>' + pct(row.rate, 1) + '</b></div></div></div>';
@@ -81,10 +70,10 @@
     var html = '<div class="detail-hero"><div class="detail-hero-top"><span class="pill amber">' + esc(b.recipe) + '</span><h3>' + esc(b.id) + '</h3></div>' +
       '<p>' + esc(b.chamber) + ' · ' + b.lots.length + ' lots / ' + b.wafers + ' 片</p>' +
       '<div class="detail-stats"><div class="detail-stat"><span>开始</span><b>' + fmtDateTime(b.start) + '</b></div>' +
-        '<div class="detail-stat"><span>结束</span><b>' + fmtDateTime(b.end) + '</b></div>' +
+        '<div class="detail-stat"><span>结束</span><b>' + fmtDateTime(b.end) + '</b></div><div class="detail-stat"><span>Lot 放行</span><b>' + fmtDateTime(b.processEnd) + '</b></div>' +
         '<div class="detail-stat"><span>时长</span><b>' + (b.duration / HOUR).toFixed(1) + ' h</b></div></div></div>';
-    html += '<table class="task-table"><thead><tr><th>Lot</th><th>PPN</th><th>Platform</th><th>片数</th></tr></thead><tbody>' +
-      b.lots.map(function (l) { return '<tr><td>' + esc(l.id) + '</td><td>' + esc(l.prod) + '</td><td>' + esc(l.platform) + '</td><td>' + l.wafer + '</td></tr>'; }).join('') +
+    html += '<table class="task-table"><thead><tr><th>Lot</th><th>PPN</th><th>Platform</th></tr></thead><tbody>' +
+      b.lots.map(function (l) { return '<tr><td>' + esc(l.id) + '</td><td>' + esc(l.prod) + '</td><td>' + esc(l.platform) + '</td></tr>'; }).join('') +
       '</tbody></table>';
     openDrawer('BAKE BATCH', b.id, html);
   }
@@ -96,20 +85,7 @@
 
   function openSettings() {
     A.state.draft = JSON.parse(JSON.stringify(A.state.options));
-    var html = '<div class="form-row"><label class="form-label">排产策略</label><div class="option-grid">' +
-      optionHTML('strategy', 'weekly', '周目标优先', '优先周交付') +
-      optionHTML('strategy', 'due', '交期优先', '优先临近交期') +
-      optionHTML('strategy', 'changeover', '减少换卡', '同类产品连续排') +
-      optionHTML('strategy', 'spt', '短工序优先', '优先短工时 Lot') +
-    '</div></div>' +
-    '<div class="form-hint">借机固定时间，避开 PM 和在制占用。</div>' +
-    '<div class="form-row"><div class="form-inline">' +
-      '<div><label class="form-label">BAKE 组批等待窗口</label><select class="select" id="set-bake-window">' +
-        [2, 4, 8, 12, 24].map(function (h) { return '<option value="' + h + '"' + (A.state.draft.bakeWindowHours == h ? ' selected' : '') + '>' + h + ' 小时</option>'; }).join('') +
-      '</select></div>' +
-      '<div><label class="form-label">换卡安装时间（分钟）</label><input class="input" id="set-setup" type="number" min="0" max="60" value="' + A.state.draft.setupMinutes + '"></div>' +
-    '</div></div>' +
-    '<div class="form-hint">参数用于本次排产。</div>';
+    var html = '<p>目标：各 PPN 月末 MPS 达成率均衡。换卡固定 5 分钟。</p><p>BAKE 每腔最多 4 Lot，升温 2h、Recipe 加工 24h、降温/换 Lot 2h，共占腔 28h，Lot 在第 26h 放行。算法自动比较立即开批与等待 4h、8h 的方案。</p><p>借机固定机台，指定日期内开始，允许跨日。</p>';
     $('#modal-body').innerHTML = html;
     $('#modal').classList.add('open');
     $('#modal').setAttribute('aria-hidden', 'false');
@@ -119,14 +95,7 @@
     $('#modal').setAttribute('aria-hidden', 'true');
   }
   function applySettings() {
-    var st = $('.option.active[data-key="strategy"]');
-    A.state.options = {
-      strategy: st ? st.getAttribute('data-value') : A.state.options.strategy,
-      borrowMode: 'reserve',
-      bakeWindowHours: Number($('#set-bake-window').value || 8),
-      setupMinutes: Number($('#set-setup').value || 0),
-      maxDelayHours: 0
-    };
+    A.state.options = {strategy:'attainment',borrowMode:'reserve',bakeWindowHours:null,setupMinutes:5};
     closeModal();
     A.runSchedule();
   }
@@ -197,7 +166,7 @@
     var lines = [], filename = '';
     if (kind === 'mps') {
       var rows = A.mpsRows();
-      lines.push(['Platform', 'PPN', 'MPS_Target', 'Lot_Count', 'WIP_Excluded', 'Algorithm_Completed', 'Delta', 'Achievement',
+      lines.push(['Platform', 'PPN', 'MPS_Target_Wafers', 'Lot_Count', 'WIP_Excluded_Lots', 'Completed_Wafers', 'Delta_Wafers', 'Achievement',
         'First_Completion', 'Last_Completion', 'Status'].map(csvCell).join(','));
       rows.forEach(function (x) {
         lines.push([x.platform, x.ppn, x.mps, x.lots, x.wip, x.completed, x.delta, pct(x.rate, 2),
@@ -205,11 +174,11 @@
       });
       filename = 'MPS_comparison_' + (A.state.data.meta.month || '') + '.csv';
     } else {
-      lines.push(['LotID', 'PROD', 'Platform', 'Wafer', 'TargetWeek', 'CP_End', 'Bake_Start', 'Bake_End', 'Complete', 'Status', 'Batch', 'Chamber'].map(csvCell).join(','));
-      A.state.result.lots.forEach(function (l) {
-        lines.push([l.id, l.prod, l.platform, l.wafer, l.week, fmtDateTime(l.cpEnd),
-          fmtDateTime(l.bakeStart), fmtDateTime(l.bakeEnd), fmtDateTime(l.complete),
-          l.status, l.batch ? l.batch.id : '', l.bakeChamber || ''].map(csvCell).join(','));
+      lines.push(['LotID','PROD','Platform','Wafer_Qty','StepIndex','STEP','RECIPE','Resource','CardType','Start','End','LotComplete','Status'].map(csvCell).join(','));
+      A.state.result.lots.forEach(function(l){
+        (l.routeTasks||[]).forEach(function(t,i){
+          lines.push([l.id,l.prod,l.platform,l.wafer,i+1,t.step,t.recipe,t.machine||t.chamber||'',t.card||'',fmtDateTime(t.start),fmtDateTime(t.end),fmtDateTime(l.complete),l.status].map(csvCell).join(','));
+        });
       });
       filename = 'schedule_lots_' + (A.state.data.meta.month || '') + '.csv';
     }

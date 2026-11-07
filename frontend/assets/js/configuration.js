@@ -4,7 +4,7 @@
   var A = window.TSApp, esc = A.esc, busy = false;
   var schemas = {
     eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
-    borrow: [['eqp', '机台', 'machine'], ['start', '借机开始时间（北京时间）', 'datetime-local'], ['hours', '连续小时', 'number']],
+    borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number']],
     pm: [['eqp', '固定机台', 'resource'], ['early', '最早日期', 'date'], ['due', '期望日期', 'date'], ['over', '最迟完成日期', 'date'], ['hours', '连续小时', 'number'], ['start', '指定开始（可留空）', 'datetime-local']],
     wip: [['lotId', '在制 LotID'], ['eqp', '占用机台（等待可空）', 'resource'], ['chamber', 'BAKE 腔体（CP 留空）'], ['card', '占用针卡（BAKE 留空）'], ['start', '占用开始', 'datetime-local'], ['end', '预计释放', 'datetime-local']]
   };
@@ -21,8 +21,7 @@
     return '<details class="config-details"><summary>' + label + '</summary><textarea class="input config-json" id="cfg-' + key + '">' + esc(JSON.stringify(value, null, 2)) + '</textarea></details>';
   }
   function resources(bake) {
-    var d = A.state.data, values = d.eqp.map(function (m) { return m.id; });
-    if (bake) for (var i = 1; i <= (d.bakeResources || {machines:7}).machines; i++) values.push('BAKE-' + String(i).padStart(2, '0'));
+    var d = A.state.data, values = d.eqp.filter(function(m){return bake || !/OVEN/i.test(m.type);}).map(function(m){return m.id;});
     return values;
   }
   function rowHTML(key, row) {
@@ -51,15 +50,15 @@
       '<div class="config-grid">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(c.dataSource.displayName || c.dataSource.path.split(/[\\/]/).pop()) + '</span><span class="config-hint">选择新文件后点击下方“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复参考配置”。</span><input id="cfg-path" type="hidden" value="' + esc(c.dataSource.path) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
       '<details class="config-details"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
-      jsonBox('platformType', 'Platform / TYPE 映射', d.platformType) + jsonBox('cardType', '针卡 TYPE 映射', d.cardType) +
+      '<p class="config-hint">Platform 直接匹配 EQP.TYPE；针卡按 Recipe 候选类型匹配，实物数量充足。</p>' +
       table('eqp', 'CP 机台', d.eqp) + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
-      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中只填 LotID；RUN 缺少快照时暂停分配；LOST 不可用。</p></details>' + table('wip', '在制 Lot', d.wip || []) +
+      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中只填 LotID；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) +
       '<div class="source-actions config-actions"><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复参考配置</button></div>' +
       ((d.planIssues || []).length ? '<div class="note-card">当前计划冲突：' + d.planIssues.map(esc).join('<br>') + '</div>' : '') +
-      '<div class="section-title"><h2>添加计划与推荐</h2><p>借机推荐同类型机台；PM 推荐维护时间。</p></div>' +
+      '<div class="section-title"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
       '<label class="config-field">所选机台<select class="select" id="cfg-machine">' + resources(true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
-      input('time', '借机开始时间', d.meta.month + '-01T08:00', 'datetime-local') + input('hours', '时长（小时）', 8, 'number') +
+      input('time', '借机日期', d.meta.month + '-01', 'date') + input('hours', '时长（小时）', 8, 'number') +
       input('early', 'PM 最早日期', d.meta.month + '-01', 'date') + input('due', 'PM 期望日期', d.meta.month + '-03', 'date') + input('over', 'PM 最迟完成日期', d.meta.month + '-05', 'date') + '</div>' +
       '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-recommend">试排并推荐</button><button class="btn primary" id="cfg-add">添加计划并保存</button></div><div id="cfg-result" class="note-card" role="status">推荐后点击添加保存。</div></div></div>';
   };
@@ -73,12 +72,12 @@
       scheduling[key] = A.$$('#cfg-table-' + key + ' tbody tr').map(function (tr) {
         var row = {};
         A.$$('[data-field]', tr).forEach(function (el) { var v = el.value.trim(); row[el.dataset.field] = el.type === 'number' ? Number(v) : el.type === 'datetime-local' ? iso(v) : v; });
-        if (key === 'borrow') { row.date = row.start.slice(0, 10); row.generatedAt = row.start; }
+        if (key === 'borrow') { row.date = row.date || (row.start || '').slice(0, 10); delete row.generatedAt; }
         return row;
       });
     });
     scheduling.bakeResources = {machines:Number(A.$('#cfg-bake-machines').value), chambers:Number(A.$('#cfg-bake-chambers').value)};
-    ['platformType', 'cardType'].forEach(function (key) { scheduling[key] = JSON.parse(A.$('#cfg-' + key).value); });
+
     return { dataSource: src, fieldMap: JSON.parse(A.$('#cfg-fields').value), scheduling: scheduling };
   }
   async function request(path, update) {
@@ -102,8 +101,9 @@
     var kind = A.$('#cfg-kind').value, time = A.$('#cfg-time').value, hours = Number(A.$('#cfg-hours').value);
     if (!Number.isFinite(hours) || hours <= 0) throw new Error('请输入正数时长');
     if (kind === 'borrow') {
-      if (!time || eqp.indexOf('BAKE') === 0) throw new Error('借机请选择 CP 机台并填写开始时间');
-      return {eqp:eqp, date:time.slice(0,10), start:iso(time), generatedAt:iso(time), hours:hours};
+      if (!time || !A.state.data.eqp.some(function(m){return m.id===eqp && !/OVEN/i.test(m.type);})) throw new Error('借机请选择 CP 机台并填写开始时间');
+      if (hours<0.6 || hours>24) throw new Error('借机时数需为 0.6–24 小时');
+      return {eqp:eqp, date:time.slice(0,10), hours:hours};
     }
     return {eqp:eqp, early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};
   }
@@ -153,7 +153,7 @@
         if (id === 'cfg-add') {
           data[kind].push(proposal);
           var test = A.SCHED.run(data, A.state.options);
-          if (kind === 'borrow' && addedBorrow(test, data.borrow.length).status === 'cancel') throw new Error('借机时间与 PM、在制占用或其他借机冲突，请先推荐其他机台');
+
           cfg.scheduling[kind].push(proposal);
           await save(cfg);
         } else if (kind === 'pm') {
@@ -161,23 +161,11 @@
           var result = A.SCHED.run(data, A.state.options), pm = result.pmRecords[result.pmRecords.length - 1];
           output.textContent = '固定机台 ' + pm.eqp + '，推荐维护时间：' + A.fmtDateTime(pm.start) + ' → ' + A.fmtDateTime(pm.end) + '。点击“添加计划并保存”后生效。';
         } else {
-          var selected = data.eqp.find(function (m) { return m.id === eqp; });
-          if (!selected) throw new Error('请选择 CP 机台');
-          output.textContent = '正在逐台试排…';
-          var scores = [], candidates = data.eqp.filter(function (m) { return m.type === selected.type && m.status !== 'LOST'; });
-          for (var machine of candidates) {
-            await new Promise(function (resolve) { setTimeout(resolve, 20); });
-            var candidate = JSON.parse(JSON.stringify(data));
-            candidate.borrow.push(Object.assign({}, proposal, {eqp:machine.id}));
-            try {
-              var trial = A.SCHED.run(candidate, A.state.options);
-              if (addedBorrow(trial, candidate.borrow.length).status === 'cancel') continue;
-              scores.push({id:machine.id, done:trial.metrics.completedMonth, weekly:trial.metrics.onTimeRate, setups:trial.metrics.setups});
-            } catch (err) { /* An infeasible resource calendar cannot be recommended. */ }
-          }
-          scores.sort(function (a,b) { return b.done-a.done || b.weekly-a.weekly || a.setups-b.setups || a.id.localeCompare(b.id); });
-          output.textContent = scores.length ? scores.slice(0,5).map(function (s,i) { return (i ? '候选 ' : '推荐 ') + s.id + '：算法月完成 ' + s.done + ' lot，周按期率 ' + A.pct(s.weekly) + '，换卡 ' + s.setups + ' 次'; }).join('；') + '。借机按原时间执行，保存后生效。' : '同 TYPE 机台在该时段均不可借用，请调整时间。';
-          if (scores.length) A.$('#cfg-machine').value = scores[0].id;
+          data.borrow.push(proposal);
+          var trial=A.SCHED.run(data,A.state.options);
+          var request=trial.borrows.find(function(b){return b.req.eqp===proposal.eqp && b.req.date===proposal.date && b.req.hours===proposal.hours;});
+          output.textContent=request && request.status!=='cancel' ? '固定机台 '+request.eqp+'，安排时间：'+A.fmtDateTime(request.start)+' → '+A.fmtDateTime(request.end)+'。保存后生效。' : request && request.suggestion ? '当天无法执行，原机台建议：'+A.fmtDateTime(request.suggestion.start)+' → '+A.fmtDateTime(request.suggestion.end)+'。建议尚未执行。' : '原机台不可用，保留未执行计划，不自动换机。';
+
         }
       }
     } catch (err) {

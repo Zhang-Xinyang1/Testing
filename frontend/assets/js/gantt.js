@@ -10,7 +10,7 @@
     var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
     var start = ganttStart(r, g, rangeDays);
     var platformOpts = '<option value="all">全部 Platform</option>' +
-      ['K1', 'K2', 'K3', 'K4', 'K5'].map(function (p) {
+      Object.keys(A.state.data.platformType).sort().map(function (p) {
         return '<option value="' + p + '"' + (g.platform === p ? ' selected' : '') + '>' + p + ' · ' + A.state.data.platformType[p] + '</option>';
       }).join('');
     var html = '<div class="toolbar">' +
@@ -26,11 +26,11 @@
       (g.mode !== 'bake' ? '<select class="select" id="gantt-platform">' + platformOpts + '</select>' : '') +
       '<input class="input search" id="gantt-lot-q" placeholder="定位 Lot，如 PPN01-L0001" value="' + esc(g.q) + '">' +
       '<button class="btn ghost small" data-gantt-month>回到月初</button>' +
-      '<span class="filter-count">' + num(A.state.data.eqp.length) + ' 台 CP · ' + r.chambers.length + ' 个 BAKE 腔体</span>' +
+      '<span class="filter-count">' + num(r.machines.length) + ' 台 CP · ' + r.chambers.length + ' 个 BAKE 腔体</span>' +
     '</div>' +
     '<div class="gantt-card">' +
       '<div class="gantt-legend">' +
-        '<span><i style="background:#3b74ff"></i>K1</span><span><i style="background:#0fa8a0"></i>K2</span><span><i style="background:#e89b1c"></i>K3</span><span><i style="background:#7457e8"></i>K4</span><span><i style="background:#d9484f"></i>K5</span>' +
+        '<span>CP 任务按机台组着色</span>' +
         '<span><i style="background:#f0b45a"></i>BAKE 批</span><span><i style="background:#c9b8f5"></i>PM 维护</span><span><i style="background:#f3a58a"></i>借机</span><span><i style="background:#65758b"></i>在制占用 / 不可用</span>' +
         '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击详情</span>' +
       '</div>' +
@@ -63,7 +63,7 @@
     var r = A.state.result, g = A.state.gantt;
     var rows = [];
     if (g.mode !== 'bake') {
-      var types = g.platform === 'all' ? ['E1', 'E2', 'E3', 'E4', 'E5'] : [A.state.data.platformType[g.platform]];
+      var types = g.platform === 'all' ? Array.from(new Set(r.machines.map(function(m){return m.type;}))).sort() : [g.platform];
       types.forEach(function (type) {
         var ms = r.machines.filter(function (m) { return m.type === type; });
         rows.push({ kind: 'group', label: platformOfType(type) + ' · ' + type, sub: ms.length + ' 台' });
@@ -71,13 +71,11 @@
       });
     }
     if (g.mode !== 'cp') {
-      for (var b = 1; b <= 7; b++) {
-        var eqp = 'BAKE-0' + b;
-        rows.push({ kind: 'group', label: eqp, sub: '4 腔' });
-        r.chambers.filter(function (c) { return c.eqp === eqp; }).forEach(function (c) {
-          rows.push({ kind: 'machine', res: c, label: c.id, sub: 'BAKE' });
-        });
-      }
+      Array.from(new Set(r.chambers.map(function(c){return c.eqp;}))).forEach(function(eqp){
+        var chambers=r.chambers.filter(function(c){return c.eqp===eqp;});
+        rows.push({kind:'group',label:eqp,sub:chambers.length+' 腔'});
+        chambers.forEach(function(c){rows.push({kind:'machine',res:c,label:c.id,sub:'BAKE'});});
+      });
     }
     var y = 46;
     rows.forEach(function (row) {
@@ -89,7 +87,7 @@
   }
 
   function platformOfType(type) {
-    var found = 'K1';
+    var found = type;
     Object.keys(A.state.data.platformType).forEach(function (k) { if (A.state.data.platformType[k] === type) found = k; });
     return found;
   }

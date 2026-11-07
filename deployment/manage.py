@@ -146,7 +146,7 @@ def check():
     print('环境：%s / %s / Python %s' % (platform.system(), platform.machine(), platform.python_version()))
     print('Python：%s\n配置：%s\n监听：%s:%d' % (sys.executable, config, host, port))
     print('前端：frontend/index.html 及 %d 个静态资源；后端：backend/server.py' % (len(REQUIRED_FRONTEND) - 1))
-    print('输入：%d lot / %d 台 CP；前端与 API 由同一服务同源提供。' % (len(data['lots']), len(data['eqp'])))
+    print('输入：%d wafer / %d lot / %d 台 CP；前端与 API 由同一服务同源提供。' % (sum(l[3] for l in data['lots']), len(data['lots']), len([e for e in data['eqp'] if 'OVEN' not in e['type'].upper()])))
     if data.get('planIssues'):
         print('注意：当前计划存在 %d 项冲突，启动后请在页面修正。' % len(data['planIssues']))
     return config, host, port

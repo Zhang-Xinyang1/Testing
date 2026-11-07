@@ -1,0 +1,121 @@
+import os
+import sys
+import unittest
+import re
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, 'backend'))
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+from server_core import build_payload, load_config, validate_schedule
+import copy
+from build_data import read_workbook, clean_rows
+
+class CaseRelationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.data=build_payload()
+        cls.sheets={n:clean_rows(rows)[1] for n,rows in read_workbook(os.path.join(ROOT,load_config()['dataSource']['path']))}
+
+    def test_counts_and_need_units(self):
+        d=self.data
+        self.assertEqual(len(d['mps']),72)
+        self.assertEqual(sum(m['mps'] for m in d['mps']),11000)
+        self.assertEqual(len(d['lots']),sum((m['mps']+24)//25 for m in d['mps']))
+        self.assertEqual(sum(l[3] for l in d['lots']),11000)
+        self.assertEqual(d['meta']['mpsUnit'],'wafer')
+        self.assertTrue(all(2<=m['mps']<=800 for m in d['mps']))
+        self.assertEqual(len(d['borrow']),119)
+
+    def test_lot_wafer_bounds_and_product_totals_are_enforced(self):
+        for invalid in (0,26,1.5,None):
+            d=copy.deepcopy(self.data);d['lots'][0][3]=invalid
+            with self.assertRaisesRegex(ValueError,'wafer'):
+                validate_schedule(d)
+        d=copy.deepcopy(self.data);d['lots'][0][3]-=1
+        with self.assertRaisesRegex(ValueError,'合计'):
+            validate_schedule(d)
+
+    def test_actual_lot_sizes_override_full_25_assumption(self):
+        from unittest.mock import patch
+        cfg=load_config()
+        cfg['dataSource']['sheetMap']['lots']='Lot明细'
+        cfg['fieldMap']['Lot明细']={'lotId':'LotID','ppn':'PROD','wafer':'Wafer Qty'}
+        rows=[['LotID','PROD','Wafer Qty']]
+        for m in self.data['mps']:
+            sizes=[l[3] for l in self.data['lots'] if l[1]==m['ppn']]
+            if m['ppn']=='PPN01':sizes=[10,15]+sizes[1:]
+            rows.extend([[m['ppn']+'-A'+str(i),m['ppn'],q] for i,q in enumerate(sizes)])
+        workbook=read_workbook(os.path.join(ROOT,cfg['dataSource']['path']))+[('Lot明细',rows)]
+        with patch('server_core.read_workbook',return_value=workbook):
+            actual=build_payload(config=cfg)
+        self.assertEqual(actual['meta']['lotSizing'],'actual')
+        self.assertEqual([l[3] for l in actual['lots'] if l[1]=='PPN01'][:2],[10,15])
+        self.assertEqual(sum(l[3] for l in actual['lots']),11000)
+        self.assertEqual(len(actual['lots']),len(self.data['lots'])+1)
+
+    def test_three_cp_groups_and_28_chambers(self):
+        cp=[e for e in self.data['eqp'] if 'OVEN' not in e['type']]
+        self.assertEqual(len(cp),27)
+        self.assertEqual(len({e['type'] for e in cp}),3)
+        self.assertEqual(len(self.data['bakeResources']['ids']),7)
+        self.assertEqual(self.data['bakeResources']['chambers'],4)
+        for m in self.data['mps']:
+            self.assertTrue(set(m['platform'].split(';'))<={e['type'] for e in cp})
+
+    def test_31_recipes_62_card_types_no_stock_or_wafer_limit(self):
+        d=self.data
+        self.assertEqual(len(d['recipes']),31)
+        self.assertEqual(len({c for r in d['recipes'] for c in r['cards']}),62)
+        self.assertTrue(all(1<=len(r['cards'])<=4 for r in d['recipes']))
+        self.assertTrue(all(isinstance(l[3],int) and 1<=l[3]<=25 for l in d['lots']))
+        for m in d['mps']:
+            self.assertEqual(sum(l[3] for l in d['lots'] if l[1]==m['ppn']),m['mps'])
+
+    def test_route_preserves_source_rows_and_parses_recipe_times(self):
+        for m in self.data['mps']:
+            rows=[r for r in self.sheets['测试flow&工时'] if r['PROD']==m['ppn']]
+            ops=self.data['flows'][m['ppn']]
+            self.assertEqual([r['STEP'] for r in rows],[o[0] for o in ops])
+            for row,op in zip(rows,ops):
+                if op[0]=='BAKE':
+                    self.assertIn(op[1],('210C24H','250C24H'));self.assertEqual(op[2],24);self.assertFalse(row['TIME'])
+                elif op[0]=='QTIME1':
+                    self.assertIn(op[1],('7','14','28'));self.assertEqual(op[2],int(op[1]));self.assertFalse(row['TIME'])
+                else:
+                    self.assertIn(op[1],{r['recipe'] for r in self.data['recipes']});self.assertGreater(op[2],0)
+
+    def test_exact_six_confirmed_patterns_including_repeated_bake(self):
+        expected = {
+            ('CP1','BAKE','CP2','BAKE','CP3','QTIME1','CP4'),
+            ('CP1','BAKE','CP2','QTIME1','CP3'),
+            ('CP1','BAKE','CP2','QTIME1','CP3','CP4'),
+            ('CP1','BAKE','CP2','BAKE','CP3','CP4','QTIME1'),
+            ('CP1','BAKE','CP2'),
+            ('CP1','BAKE','CP2','BAKE','CP3'),
+        }
+        actual={tuple(op[0] for op in ops) for ops in self.data['flows'].values()}
+        self.assertEqual(actual, expected)
+        self.assertTrue(all(op[0]!='QTIME' for ops in self.data['flows'].values() for op in ops))
+
+    def test_invalid_route_is_rejected_without_reordering(self):
+        d=copy.deepcopy(self.data)
+        product=d['mps'][0]['ppn']
+        d['flows'][product][0],d['flows'][product][1]=d['flows'][product][1],d['flows'][product][0]
+        with self.assertRaisesRegex(ValueError,'六种路线'):
+            validate_schedule(d)
+
+    def test_initial_installation_matches_recipe(self):
+        candidates={r['recipe']:r['cards'] for r in self.data['recipes']}
+        for e in self.data['eqp']:
+            if 'OVEN' not in e['type']:
+                self.assertEqual(e['status'],'RUN');self.assertIn(e['card'],candidates[e['recipe']])
+
+    def test_borrow_and_pm_references(self):
+        ids={e['id'] for e in self.data['eqp']}
+        for b in self.data['borrow']:
+            self.assertIn(b['eqp'],ids);self.assertTrue(.6<=b['hours']<=24);self.assertNotIn('generatedAt',b)
+        self.assertEqual(self.data['planIssues'],[])
+
+    def test_exact_seven_business_sheets(self):
+        self.assertEqual(set(self.sheets),{'MPS','EQP','针卡','测试flow&工时','借机计划','PM计划','约束条件'})
+
+if __name__=='__main__':unittest.main()

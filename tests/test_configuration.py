@@ -35,7 +35,7 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_schedule(d)
         d = copy.deepcopy(self.data)
-        d['eqp'][0]['type'] = 'WRONG'
+        d['mps'][0]['platform'] = 'WRONG'
         with self.assertRaises(ValueError):
             validate_schedule(d)
 
@@ -44,6 +44,16 @@ class ConfigurationTests(unittest.TestCase):
         c['fieldMap']['MPS']['ppn'] = 'NonexistentColumn'
         with self.assertRaisesRegex(ValueError, '字段映射不存在'):
             build_payload(config=c)
+
+    def test_seven_sheet_mode_falls_back_without_helper_sheets(self):
+        c = load_config()
+        for key in ('params', 'lots', 'weekly'):
+            c['dataSource']['sheetMap'][key] = 'Missing-' + key
+        data = build_payload(config=c)
+        self.assertEqual(data['weekly'], [])
+        self.assertEqual(data['rules'], [])
+        self.assertEqual(sum(l[3] for l in data['lots']), sum(m['mps'] for m in data['mps']))
+        self.assertTrue(all(1<=lot[3]<=25 for lot in data['lots']))
 
     def test_overlapping_wip_card_is_rejected(self):
         d = copy.deepcopy(self.data)
@@ -55,7 +65,7 @@ class ConfigurationTests(unittest.TestCase):
             validate_schedule(d)
 
     def test_api_preview_save_reload_and_failure_are_atomic(self):
-        workbook = ROOT / 'data/Testing调度算例_v1.xlsx'
+        workbook = ROOT / 'data/Testing调度算例_新版.xlsx'
         before = hashlib.sha256(workbook.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / 'config.json'
@@ -77,7 +87,7 @@ class ConfigurationTests(unittest.TestCase):
                                           'bakeResources': {'machines': 9, 'chambers': 2}}}
                 original = config.read_bytes()
                 preview = post('/api/preview', update)
-                self.assertEqual(preview['data']['bakeResources']['machines'], 9)
+                self.assertEqual(preview['data']['bakeResources']['machines'], 7)
                 self.assertEqual(config.read_bytes(), original)
                 upload = urllib.request.Request(base + '/api/uploads', workbook.read_bytes(),
                     {'Content-Type': 'application/octet-stream', 'X-Filename': 'reference.xlsx'})
