@@ -741,6 +741,43 @@ index 85b2556..d5bcf4d 100644
        else if (hit && hit.type === 'bake') openBatchDrawer(hit.data.id);
        else if (hit && hit.type === 'pm') A.toast('PM 维护：' + hit.res.id + ' · ' + fmtDateTime(hit.data[0]) + ' → ' + fmtDateTime(hit.data[1]));
        else if (hit && hit.type === 'borrow') A.toast('借机 ' + hit.data.id + ' · ' + hit.data.eqp + ' · 按指定时间执行');
+diff --git a/tools/build_case.py b/tools/build_case.py
+index 32a3bf0..0447d8f 100644
+--- a/tools/build_case.py
++++ b/tools/build_case.py
+@@ -128,7 +128,7 @@ def build_rows():
+         product = 'PPN%02d' % (index + 1)
+         first, second = types[index % 3], types[(index + 1) % 3]
+         mps.append([first if index % 3 == 0 else first + ';' + second,
+-                    product, quantities[index], 'wafer'])
++                    product + '-1', quantities[index], 'wafer'])
+         bake_index = 0
+         for step in patterns[index % len(patterns)]:
+             if step == 'BAKE':
+@@ -168,10 +168,10 @@ def build_rows():
+     sheets = [
+         ('MPS', [['Platform', 'PPN', 'MPS', '单位']] + mps),
+         ('EQP', [['TYPE', 'EQPID', 'Current ProbeCard', 'Current Recipe', 'Status']] + eqp),
+-        ('针卡', [['Recipe', 'ProberCard List']] + cards),
+-        ('测试flow&工时', [['PROD', 'STEP', 'RECIPE', 'TIME']] + flows),
++        ('针卡', [['Recipe', 'ProbeCard List']] + cards),
++        ('测试flow&工时', [['PROD', 'STEP', 'RECIPE', 'Time']] + flows),
+         ('借机计划', [['DATE', 'EQPID', '借机时数']] + borrow),
+-        ('PM计划', [['EQPID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours']] + pm),
++        ('PM计划', [['EQP ID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours']] + pm),
+         ('约束条件', [['TYPE', 'EQPID', 'Constraint Recipe'],
+                      ['CP-A', 'CP-01', recipe(0)],
+                      ['CP-B', 'CP-10', recipe(3)]]),
+@@ -185,7 +185,8 @@ def build_rows():
+         'mps': sum(row[2] for row in mps), 'unit': 'wafer',
+         'lotSizing': 'default-25-tail',
+         'assumptions': '27 CP / 9 per group; seven confirmed route patterns assigned '
+-                       'cyclically across 72 synthetic products; synthetic CP TIME is minutes '
++                       'cyclically across 72 synthetic products; MPS PPN uses a -1 vendor '
++                       'suffix while flow PROD uses the prefix; synthetic CP Time is minutes '
+                        'per wafer, other times and plans are placeholders',
+     }
+     return sheets, manifest
 diff --git a/tools/build_data.py b/tools/build_data.py
 index d0319f9..37b4730 100644
 --- a/tools/build_data.py

@@ -34,7 +34,7 @@ python3 run.py
 
 规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认七种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工；CP 工时按 `Time`（分钟/wafer）× Lot 实际 wafer 数计算。可跨组 Lot 先按各组剩余 CP 机时预分配，优先使用非瓶颈组。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
 
-**当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务；需要重建合成算例时运行 `python3 tools/build_case.py`。
+**当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。合成 MPS 的 PPN 使用 `PPNxx-1` 形式，flow 的 `PROD` 使用 `PPNxx`，用于验证 `-` 后厂家后缀忽略逻辑。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务；需要重建合成算例时运行 `python3 tools/build_case.py`。
 
 规则 PPT 与重跑结果在 `output/`；旧算例与旧 PPT 已删除。
 

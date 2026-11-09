@@ -128,7 +128,7 @@ def build_rows():
         product = 'PPN%02d' % (index + 1)
         first, second = types[index % 3], types[(index + 1) % 3]
         mps.append([first if index % 3 == 0 else first + ';' + second,
-                    product, quantities[index], 'wafer'])
+                    product + '-1', quantities[index], 'wafer'])
         bake_index = 0
         for step in patterns[index % len(patterns)]:
             if step == 'BAKE':
@@ -185,7 +185,8 @@ def build_rows():
         'mps': sum(row[2] for row in mps), 'unit': 'wafer',
         'lotSizing': 'default-25-tail',
         'assumptions': '27 CP / 9 per group; seven confirmed route patterns assigned '
-                       'cyclically across 72 synthetic products; synthetic CP TIME is minutes '
+                       'cyclically across 72 synthetic products; MPS PPN uses a -1 vendor '
+                       'suffix while flow PROD uses the prefix; synthetic CP Time is minutes '
                        'per wafer, other times and plans are placeholders',
     }
     return sheets, manifest

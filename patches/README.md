@@ -1,7 +1,7 @@
 # 字段读取放宽 + 重复 LotID 补丁
 
 补丁文件：`read-and-duplicate-lot.patch`  
-适用基线：当前仓库 `HEAD`（提交 `ccc8272` 之后的工作区改动已在补丁中体现）。  
+适用基线：`ccc8272`（补丁包含从该提交到当前工作区的全部代码改动）。  
 补丁只包含代码和 `config/config.json`，不包含 Excel、前端 `data.js`、文档和测试。
 
 ## 应用前
@@ -83,6 +83,7 @@ patch -p1 < patches/read-and-duplicate-lot.patch
 - 排产按汇总后的一个 PPN 需求执行，避免同一产品重复统计。
 - `backend/scheduler.py` 和 `backend/diagnostics.py` 同样按前缀汇总后的 MPS 计算产品统计和诊断，直接传入未汇总的 MPS 也不会重复出产品行。
 - `frontend/assets/js/mps.js` 增加提示：PPN 的 `-` 后后缀忽略，同一 PPN 多行按 PPN 汇总。
+- `tools/build_case.py` 生成的合成 MPS 使用 `PPNxx-1` 形式，flow 的 `PROD` 仍用 `PPNxx` 前缀，用于验证后缀忽略逻辑。
 
 ## 手工定位（补丁冲突时）
 
@@ -114,6 +115,8 @@ patch -p1 < patches/read-and-duplicate-lot.patch
   - `lot_products` / `releases` / `wafer_by_lot` / `by_lot` 相关段落：按 `lotKey` 取，保留 LotID 兜底。
 - `tools/build_data.py`
   - `def num`：替换为带正则回退的版本。
+- `tools/build_case.py`
+  - 合成 MPS 的 PPN 改为 `PPNxx-1` 形式；flow 的 `PROD` 仍用 `PPNxx` 前缀。
 - `config/config.json`
   - `针卡.cards` → `ProbeCard List`
   - `测试flow&工时.time` → `Time`
