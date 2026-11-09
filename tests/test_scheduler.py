@@ -117,7 +117,8 @@ class SchedulerRuleTests(unittest.TestCase):
         tasks = run(data)['cpTasks']
         self.assertEqual(tasks[0]['setup'], 0)
         self.assertEqual(tasks[1]['setup'], 5 * MIN)
-        self.assertEqual(tasks[1]['end'] - tasks[1]['blockStart'], 15 * MIN)
+        self.assertEqual(tasks[1]['end'] - tasks[1]['blockStart'],
+                         10 * MIN * 25 + 5 * MIN)
     def test_oven_pm_blocks_all_four_chambers_inside_window(self):
         data = fixture()
         data['bakeResources']['chambers'] = 4
@@ -222,9 +223,23 @@ class SchedulerRuleTests(unittest.TestCase):
         result = run(data)
         self.assertTrue(all(product['completed'] > 0
                             for product in result['productStats']))
+    def test_cp_processing_time_scales_with_actual_wafer_count(self):
+        data = fixture(2)
+        data['mps'][0]['mps'] = 26
+        data['lots'][0][3] = 25
+        data['lots'][1][3] = 1
+        data['eqp'][1]['status'] = 'LOST'
+        data['flows']['P'] = [['CP1', 'R', 10]]
+        result = run(data)
+        by_lot = {task['lotId']: task for task in result['cpTasks']}
+        self.assertEqual(by_lot['L0']['duration'], 10 * MIN * 25)
+        self.assertEqual(by_lot['L1']['duration'], 10 * MIN * 1)
+        self.assertEqual(by_lot['L0']['timePerWafer'], 10)
+        self.assertEqual(by_lot['L1']['timePerWafer'], 10)
+
     def test_wafer_completion_differs_from_lot_completion_for_tail_lot(self):
         data = fixture(2)
-        data['meta']['days'] = 1
+        data['meta']['days'] = 21
         data['mps'][0]['mps'] = 26
         data['lots'][0][3] = 25
         data['lots'][1][3] = 1
@@ -238,7 +253,8 @@ class SchedulerRuleTests(unittest.TestCase):
         self.assertEqual(result['productStats'][0]['rate'], 25 / 26)
         self.assertEqual(metrics['completionRate'], 25 / 26)
         self.assertEqual(sum(week['plannedWeek'] for week in result['weekly']), 25)
-        self.assertEqual(result['cpTasks'][0]['duration'], 1200 * MIN)
+        self.assertEqual(result['cpTasks'][0]['duration'], 1200 * MIN * 25)
+        self.assertEqual(result['cpTasks'][1]['duration'], 1200 * MIN * 1)
 
     def test_compact_result_keeps_browser_contract_without_mutating_full_result(self):
         full = run(fixture())

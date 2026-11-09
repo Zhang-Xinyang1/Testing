@@ -100,7 +100,10 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertTrue(scheduled['ok'])
                 self.assertEqual(scheduled['result']['metrics']['totalLots'],
                                  len(self.data['lots']))
-                self.assertEqual(scheduled['result']['metrics']['completedWafers'], 11000)
+                self.assertLessEqual(scheduled['result']['metrics']['completedWafers'], 11000)
+                self.assertGreater(scheduled['result']['metrics']['completedWafers'], 0)
+                self.assertEqual(scheduled['result']['metrics']['completedWafers'],
+                                 sum(p['completed'] for p in scheduled['result']['productStats']))
                 reserved = post('/api/oracle/config', {'host': 'db.internal', 'port': 1521,
                     'service': 'MES', 'user': 'readonly', 'passwordEnv': 'ORACLE_PASSWORD', 'views': {'mps': 'MES.V_MPS'}})
                 self.assertEqual(reserved['status'], 'reserved')

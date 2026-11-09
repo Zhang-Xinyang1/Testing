@@ -184,7 +184,8 @@ def build_rows():
         'mps': sum(row[2] for row in mps), 'unit': 'wafer',
         'lotSizing': 'default-25-tail',
         'assumptions': '27 CP / 9 per group; six confirmed route patterns assigned '
-                       'cyclically, 12 synthetic products each; synthetic times and plans',
+                       'cyclically, 12 synthetic products each; synthetic CP TIME is minutes '
+                       'per wafer, other times and plans are placeholders',
     }
     return sheets, manifest
 

@@ -156,6 +156,11 @@ def inspect_run(body):
                 add('R03', lot['id']+'：工序顺序或就绪时间异常')
             if op[0]=='QTIME1' and task['end']-task['start'] != int(op[1])*60000:
                 add('R03', lot['id']+'：QTIME 不足')
+            if str(op[0]).startswith('CP'):
+                expected_ms = op[2] * 60000 * wafer_by_lot.get(
+                    lot['id'], lot.get('wafer', 0))
+                if abs((task['end']-task['start']) - expected_ms) > 0.01:
+                    add('R03', lot['id']+'：CP 工时与 wafer 数不符')
             previous=task['end']
         if route and lot.get('complete') != previous:
             add('R03', lot['id']+'：末工序与最终完成时间不一致')

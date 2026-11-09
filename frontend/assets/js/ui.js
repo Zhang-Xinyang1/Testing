@@ -55,7 +55,7 @@
     html += '<div class="timeline"><div class="timeline-title"><span>工艺路线</span><span class="muted tiny">' + route.length + ' 道工序</span></div>';
     route.forEach(function (op) {
       html += '<div class="route-item"><div class="route-index">' + esc(op[0]) + '</div><div class="route-info"><b>' + esc(op[1]) + '</b>' +
-        '<span>' + (op[0] === 'BAKE' ? op[2] + ' 小时/批' : op[2] + ' 分钟') + '</span></div></div>';
+        '<span>' + (op[0] === 'BAKE' ? op[2] + ' 小时/批' : op[0] === 'QTIME1' ? op[2] + ' 分钟等待' : op[2] + ' 分钟/片') + '</span></div></div>';
     });
     html += '</div><div class="divider"></div><div class="kv"><dt>首件完成</dt><dd>' + fmtDateTime(row.first) + '</dd>' +
       '<dt>末件完成</dt><dd>' + fmtDateTime(row.last) + '</dd>' +

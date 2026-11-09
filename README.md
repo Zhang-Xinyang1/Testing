@@ -17,6 +17,8 @@
 
 Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏览器；SSH/无界面服务器只打印访问地址。前端与 API 由同一个 Python 服务同源提供，排产通过 `POST /api/schedule` 在 Python 后端执行，无需 Node.js、npm 或前端构建。更新后端或配置后请执行重启；只更新前端静态资源时刷新页面即可。关闭启动窗口后服务继续运行，但普通后台模式不保证退出登录或重启后恢复。Linux systemd 开机自启为可选操作，Windows 暂未集成开机自启。
 
+运行依赖清单见 [requirements.txt](requirements.txt)：Python 3.9+，运行时没有第三方包；`python-pptx` 仅作为 PPT 生成工具的可选依赖。
+
 ## 开发启动
 
 ```bash
@@ -28,9 +30,9 @@ python3 run.py
 
 ## 使用
 
-当前仅使用 `data/Testing调度算例_新版.xlsx`。新版按 2026-11-06 逐项确认的业务规则重建：72 个 PPN、11,000 wafer、三个 CP 机台组、31 个 CP Recipe、62 种针卡类型、119 条借机，7 台 OVEN × 4 腔。每 Lot 最多 25 片；没有实际 Lot 明细时默认满 25 片加尾批，当前共 476 Lot。BAKE 每批最多 4 Lot，无额外 wafer 总数限制；升温 2h、加工 24h、降温/换 Lot 2h，占腔 28h，Lot 在第 26h 放行。
+当前仅使用 `data/Testing调度算例_新版.xlsx`。新版按 2026-11-06 逐项确认、2026-11-09 修订 CP 工时口径的业务规则重建：72 个 PPN、11,000 wafer、三个 CP 机台组、31 个 CP Recipe、62 种针卡类型、119 条借机，7 台 OVEN × 4 腔。每 Lot 最多 25 片；没有实际 Lot 明细时默认满 25 片加尾批，当前共 476 Lot。BAKE 每批最多 4 Lot，无额外 wafer 总数限制；升温 2h、加工 24h、降温/换 Lot 2h，占腔 28h，Lot 在第 26h 放行。
 
-规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认六种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
+规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认六种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工；CP 工时按 TIME（分钟/wafer）× Lot 实际 wafer 数计算。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
 
 **当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务；需要重建合成算例时运行 `python3 tools/build_case.py`。
 

@@ -153,6 +153,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         cards.append({'recipe': recipe, 'cards': [x.strip() for x in raw.split(sep) if x.strip()]})
 
     # ---- Flow ----
+    # CP.TIME is minutes per wafer; BAKE/QTIME override duration from RECIPE.
     _, flow_rows = rows_of('flow')
     flow_order = {'BAKE': 90, 'QTIME1': 100}
     fl = {}

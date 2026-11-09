@@ -86,7 +86,10 @@ def verify(data, output_dir):
                 assert task['recipe'] == op[1]
                 assert task['start'] >= ready
                 if str(op[0]).startswith('CP'):
-                    assert task['end'] - task['start'] == op[2] * MIN
+                    expected = op[2] * MIN * lot['wafer']
+                    assert abs((task['end'] - task['start']) - expected) < 1e-6
+                    assert task['duration'] == expected
+                    assert task['timePerWafer'] == op[2]
                 if op[0] == 'QTIME1':
                     assert task['end'] - task['start'] == int(op[1]) * MIN
                 ready = task['end']

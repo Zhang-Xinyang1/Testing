@@ -292,7 +292,10 @@ def simulate(data, options):
             'weeklyDue': row[6], 'monthlyDue': row[7], 'priority': row[8],
             'ops': ops,
             'cpCount': sum(1 for op in ops if str(op[0]).startswith('CP')),
-            'cpMinutes': sum(op[2] for op in ops if str(op[0]).startswith('CP')),
+            'cpMinutesPerWafer': sum(
+                op[2] for op in ops if str(op[0]).startswith('CP')),
+            'cpMinutes': sum(
+                op[2] for op in ops if str(op[0]).startswith('CP')) * row[3],
             'cpTasks': [], 'routeTasks': [], 'bakeTasks': [],
             'cpEnd': None, 'bakeStart': None, 'bakeEnd': None,
             'complete': float('inf'), 'monthEnd': month_end,
@@ -377,7 +380,9 @@ def simulate(data, options):
                     continue
                 card = machine['card'] if machine['card'] in cards else cards[0]
                 setup = 0 if card == machine['card'] else 5 * MIN
-                slot = earliest_slot(machine, now, op[2] * MIN + setup)
+                # CP.TIME is minutes per wafer; machine time scales with lot wafers.
+                process_ms = op[2] * MIN * lot['wafer']
+                slot = earliest_slot(machine, now, process_ms + setup)
                 if slot > now:
                     next_time = min(next_time, slot)
                     continue
@@ -388,11 +393,13 @@ def simulate(data, options):
                 continue
             lot, op = best, best['ops'][best['index']]
             cp_queues[lot['prod'] + '|' + str(lot['index'])].pop(0)
-            end = now + best_setup + op[2] * MIN
+            process_ms = op[2] * MIN * lot['wafer']
+            end = now + best_setup + process_ms
             task = {
                 'kind': 'cp', 'lotId': lot['id'], 'prod': lot['prod'],
                 'platform': lot['platform'], 'wafer': lot['wafer'], 'step': op[0],
-                'recipe': op[1], 'duration': op[2] * MIN, 'setup': best_setup,
+                'recipe': op[1], 'timePerWafer': op[2],
+                'duration': process_ms, 'setup': best_setup,
                 'blockStart': now, 'start': now + best_setup, 'end': end,
                 'machine': machine['id'], 'eqp': machine['id'],
                 'type': machine['type'], 'card': best_card, 'week': lot['week'],
