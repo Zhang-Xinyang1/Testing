@@ -13,7 +13,8 @@ from http.server import ThreadingHTTPServer
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'backend'))
 from server import Handler
-from server_core import build_payload, load_config, validate_schedule
+from server_core import (build_payload, load_config, merge_mps,
+                         validate_schedule)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -39,11 +40,43 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_schedule(d)
 
+    def test_duplicate_lot_id_rows_are_allowed(self):
+        d = copy.deepcopy(self.data)
+        first = d['lots'][0]
+        d['lots'].append(list(first))
+        d['mps'][0]['mps'] += first[3]
+        validate_schedule(d)
+
+    def test_duplicate_mps_rows_are_merged_by_ppn_prefix(self):
+        d = copy.deepcopy(self.data)
+        first = d['mps'][0]
+        total = first['mps']
+        first['ppn'] = str(first['ppn']) + '-1'
+        first['mps'] = total // 2
+        d['mps'].append({'platform': 'CP-B', 'ppn': 'PPN01-2',
+                         'mps': total - total // 2})
+        merged = next(m for m in merge_mps(d['mps'])
+                      if m['ppn'] == 'PPN01')
+        self.assertEqual(merged['mps'], total)
+        self.assertIn('CP-A', merged['platform'])
+        self.assertIn('CP-B', merged['platform'])
+        validate_schedule(d)
+
+    def test_merge_mps_sums_identical_orders(self):
+        merged = merge_mps([
+            {'platform': 'CP-A', 'ppn': 'P-1', 'mps': 500},
+            {'platform': 'CP-A', 'ppn': 'P-2', 'mps': 500},
+            {'platform': 'CP-B', 'ppn': 'P-3', 'mps': 250},
+        ])
+        self.assertEqual(merged, [
+            {'platform': 'CP-A;CP-B', 'ppn': 'P', 'mps': 1250}])
+
     def test_bad_mapped_column_is_rejected(self):
         c = load_config()
         c['fieldMap']['MPS']['ppn'] = 'NonexistentColumn'
-        with self.assertRaisesRegex(ValueError, '字段映射不存在'):
+        with self.assertRaisesRegex(ValueError, '字段映射不存在') as error:
             build_payload(config=c)
+        self.assertIn('实际表头：Platform、PPN、MPS', str(error.exception))
 
     def test_seven_sheet_mode_falls_back_without_helper_sheets(self):
         c = load_config()

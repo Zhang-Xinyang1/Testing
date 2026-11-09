@@ -271,6 +271,37 @@ class SchedulerRuleTests(unittest.TestCase):
         self.assertEqual(result['cpTasks'][0]['duration'], 1200 * MIN * 25)
         self.assertEqual(result['cpTasks'][1]['duration'], 1200 * MIN * 1)
 
+    def test_duplicate_mps_orders_are_merged_by_ppn_prefix(self):
+        data = fixture(2)
+        data['mps'] = [
+            {'ppn': 'P-1', 'platform': 'A', 'mps': 25},
+            {'ppn': 'P-2', 'platform': 'B', 'mps': 25},
+        ]
+        result = run(data)
+        self.assertEqual(len(result['productStats']), 1)
+        self.assertEqual(result['productStats'][0]['ppn'], 'P')
+        self.assertEqual(result['productStats'][0]['mps'], 50)
+        self.assertEqual(result['productStats'][0]['completed'], 50)
+
+    def test_parse_date_accepts_common_excel_text_formats(self):
+        expected = parse_date('2026-09-01T00:00:00+08:00')
+        for value in ('2026/9/1', '2026-9-1', '2026年9月1日',
+                      '2026-09-01 00:00'):
+            self.assertEqual(parse_date(value), expected)
+
+    def test_duplicate_lot_ids_and_prefixed_flow_are_scheduled_as_rows(self):
+        data = fixture(2)
+        data['lots'][0][0] = 'P-1'
+        data['lots'][1][0] = 'P-1'
+        data['lots'][0][1] = 'P-1'
+        data['lots'][1][1] = 'P-1'
+        result = run(data)
+        self.assertEqual(len(result['lots']), 2)
+        self.assertEqual({lot['id'] for lot in result['lots']}, {'P-1'})
+        self.assertEqual(len({lot['key'] for lot in result['lots']}), 2)
+        self.assertEqual({lot['prod'] for lot in result['lots']}, {'P'})
+        self.assertEqual(len({task['lotKey'] for task in result['cpTasks']}), 2)
+
     def test_compact_result_keeps_browser_contract_without_mutating_full_result(self):
         full = run(fixture())
         compact = compact_result(full)
@@ -279,7 +310,7 @@ class SchedulerRuleTests(unittest.TestCase):
         self.assertIn('ops', compact['lots'][0])
         self.assertIn('cpTasks', compact['lots'][0])
         self.assertEqual(set(compact['batches'][0]['lots'][0]),
-                         {'id', 'prod', 'platform', 'wafer'})
+                         {'id', 'key', 'prod', 'platform', 'wafer'})
         self.assertNotIn('daily', compact['machines'][0])
         self.assertIn('daily', full['machines'][0])
         self.assertIn('data', full)

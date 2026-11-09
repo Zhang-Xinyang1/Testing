@@ -36,19 +36,32 @@
     $('#view-inputs').innerHTML = html;
   }
 
+  function mappedFields(sheetName, defaultFields, logicalFields) {
+    var map = (A.state.data.fieldMap || {})[sheetName] || {};
+    return logicalFields.map(function (key, index) {
+      var value = map[key];
+      if (Array.isArray(value)) value = value[0];
+      return value || defaultFields[index];
+    });
+  }
+
+  function displayMapping(value) {
+    return Array.isArray(value) ? value.join(' / ') : value;
+  }
+
   function sheetData(name) {
     var d = A.state.data;
     var sheetMap = d.sheetMap || {};
     var role = Object.keys(sheetMap).find(function (key) { return sheetMap[key] === name; });
     var names = {mps:'MPS', eqp:'EQP', cards:'针卡', flow:'测试flow&工时', borrow:'借机计划', pm:'PM计划', constraints:'约束条件', params:'算例参数', lots:'Lot明细', weekly:'周目标'};
     name = names[role] || name;
-    if (name === 'MPS') return { fields: ['Platform', 'PPN', 'MPS'], rows: d.mps.map(function (x) { return [x.platform, x.ppn, x.mps]; }) };
+    if (name === 'MPS') return { fields: mappedFields(sheetMap.mps || 'MPS', ['Platform', 'PPN', 'MPS'], ['platform', 'ppn', 'mps']), rows: d.mps.map(function (x) { return [x.platform, x.ppn, x.mps]; }) };
     if (name === 'EQP') return { fields: ['TYPE', 'EQPID', 'Current ProbeCard', 'Current Recipe', 'status'], rows: d.eqp.map(function (x) { return [x.type, x.id, x.card, x.recipe, x.status]; }) };
     if (name === '针卡') return { fields: ['Recipe', 'ProbeCard List'], rows: d.recipes.map(function (x) { return [x.recipe, x.cards.join(';')]; }) };
     if (name === '测试flow&工时') {
       var rows = [];
       Object.keys(d.flows).forEach(function (p) { d.flows[p].forEach(function (op) { rows.push([p, op[0], op[1], op[2]]); }); });
-      return { fields: ['PROD', 'STEP', 'RECIPE', 'TIME'], rows: rows };
+      return { fields: mappedFields(sheetMap.flow || '测试flow&工时', ['PROD', 'STEP', 'RECIPE', 'TIME'], ['prod', 'step', 'recipe', 'time']), rows: rows };
     }
     if (name === '借机计划') return { fields: ['DATE', 'EQPID', '借机时数', 'Generated At'], rows: d.borrow.map(function (x) { return [x.date, x.eqp, x.hours, x.generatedAt || '']; }) };
     if (name === 'PM计划') return { fields: ['EQPID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours'], rows: d.pm.map(function (x) { return [x.eqp, x.early, x.due, x.over, x.hours]; }) };
@@ -76,7 +89,7 @@
     html += '<details class="preview-mapping"><summary>字段映射</summary><div class="field-pills">' + sd.fields.map(function (f) { return '<span class="field-pill">' + esc(f) + '</span>'; }).join('') + '</div>';
     if (fmKeys.length) {
       html += '<div class="field-map">' +
-        fmKeys.map(function (k) { return '<span class="map-item"><b>' + esc(k) + '</b> → ' + esc(fm[k]) + '</span>'; }).join('') + '</div>';
+        fmKeys.map(function (k) { return '<span class="map-item"><b>' + esc(k) + '</b> → ' + esc(displayMapping(fm[k])) + '</span>'; }).join('') + '</div>';
     } else if (A.state.mode === 'server') {
       html += '<div class="field-map muted small">该表未配置 fieldMap，按 Excel 表头原样读取。</div>';
     }

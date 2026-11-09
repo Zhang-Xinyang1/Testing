@@ -350,9 +350,9 @@ function ganttHit(e) {
   function locateLot(q) {
     q = (q || '').trim().toUpperCase();
     if (!q || !A.state.result) return;
-    var task = A.state.result.cpTasks.filter(function (t) { return t.lotId.toUpperCase() === q; })[0];
+    var task = A.state.result.cpTasks.filter(function (t) { return t.lotKey === q || t.lotId.toUpperCase() === q; })[0];
     if (!task) {
-      var lot = A.state.result.lots.filter(function (l) { return l.id.toUpperCase() === q; })[0];
+      var lot = A.state.result.lots.filter(function (l) { return l.key === q || l.id.toUpperCase() === q; })[0];
       if (lot && lot.cpTasks.length) task = lot.cpTasks[0];
     }
     if (!task) { A.toast('未找到 Lot：' + q); return; }

@@ -100,6 +100,14 @@ def num(v, default=0):
     try:
         return float(v)
     except Exception:
+        pass
+    text = str(v or '').strip().replace(',', '').replace('，', '').replace('\xa0', ' ')
+    match = re.search(r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?', text)
+    if not match:
+        return default
+    try:
+        return float(match.group())
+    except Exception:
         return default
 
 

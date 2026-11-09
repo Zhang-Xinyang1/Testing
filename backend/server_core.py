@@ -12,6 +12,68 @@ from build_data import read_workbook, clean_rows, num  # noqa: E402
 DEFAULT_CONFIG = os.path.join(ROOT, 'config', 'config.json')
 
 
+def norm_key(value):
+    """Normalize a sheet/header name for tolerant matching.
+
+    Case, whitespace, full-width spaces, BOM, underscores, hyphens and dots are
+    ignored: ``EQP ID``, ``EQPID``, ``eqp_id`` and ``eqp-id`` are equivalent.
+    """
+    text = str(value or '').replace('\ufeff', '').replace('\xa0', ' ')
+    text = text.casefold()
+    return re.sub(r'[\s_\-.&＆]+', '', text)
+
+
+def resolve_column(header, wanted):
+    """Return the actual header name matching ``wanted``, or None."""
+    if not wanted:
+        return None
+    if wanted in header:
+        return wanted
+    target = norm_key(wanted)
+    for name in header:
+        if norm_key(name) == target:
+            return name
+    return None
+
+
+def mapped_column(header, value):
+    """Resolve a string or a list of acceptable header names."""
+    values = value if isinstance(value, (list, tuple)) else [value]
+    for candidate in values:
+        resolved = resolve_column(header, candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def parse_datetime(value):
+    """Parse Excel/ISO date text, accepting common non-ISO separators."""
+    text = str(value).strip()
+    if not text:
+        raise ValueError('日期为空')
+    text = text.replace('年', '-').replace('月', '-').replace('日', '')
+    text = text.replace('/', '-')
+    if ' ' in text and 'T' not in text:
+        text = text.replace(' ', 'T', 1)
+    if 'T' not in text:
+        text += 'T00:00:00+08:00'
+    text = text.replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})'
+                         r'(?:T(\d{1,2}):(\d{2})(?::(\d{2}))?)?', text)
+        if not match:
+            raise
+        parsed = datetime(
+            int(match.group(1)), int(match.group(2)), int(match.group(3)),
+            int(match.group(4) or 0), int(match.group(5) or 0),
+            int(match.group(6) or 0), tzinfo=timezone(timedelta(hours=8)))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+    return parsed
+
+
 def route_patterns():
     with open(os.path.join(ROOT, 'config', 'route_patterns.json'), encoding='utf-8') as f:
         return json.load(f)
@@ -37,11 +99,73 @@ def read_source(path):
 
 
 def rows_for(sheets, sheet_name, header_row=1):
+    def trimmed(rows):
+        return clean_rows(rows[max(0, int(header_row) - 1):])
+
     for name, rows in sheets:
         if name == sheet_name:
-            rows = rows[max(0, int(header_row) - 1):]
-            return clean_rows(rows)
+            return trimmed(rows)
+    target = norm_key(sheet_name)
+    for name, rows in sheets:
+        if norm_key(name) == target:
+            return trimmed(rows)
     raise KeyError('Sheet not found: ' + sheet_name)
+
+
+def flow_product(lot_id, explicit, flows):
+    """Resolve the flow key from an explicit PPN or the lot-id prefix.
+
+    ``PPN1-1`` and ``PPN1-2`` belong to the same flow ``PPN1``; the suffix is
+    only a vendor marker.  Prefer an explicit, valid PPN, then the full lot id,
+    then the longest prefix that exists in the flow table.
+    """
+    if explicit in flows:
+        return explicit
+    text = str(lot_id).strip()
+    if text in flows:
+        return text
+    parts = text.split('-')
+    for size in range(len(parts) - 1, 0, -1):
+        prefix = '-'.join(parts[:size]).strip()
+        if prefix in flows:
+            return prefix
+    return explicit or (parts[0].strip() if parts else '')
+
+
+def base_ppn(value):
+    """Product/flow key before the first hyphen; vendor suffix is ignored."""
+    return str(value or '').strip().split('-', 1)[0].strip()
+
+
+def merge_mps(rows):
+    """Merge MPS rows by PPN prefix; multiple orders/vendors are summed.
+
+    Platform groups are unioned in first-seen order and joined with ``;``.
+    """
+    merged, order = {}, []
+    for row in rows or []:
+        ppn = base_ppn(row.get('ppn', ''))
+        if not ppn:
+            continue
+        if ppn not in merged:
+            merged[ppn] = {'platform': '', 'ppn': ppn, 'mps': 0,
+                           '_platforms': []}
+            order.append(ppn)
+        entry = merged[ppn]
+        quantity = row.get('mps')
+        if isinstance(quantity, str):
+            quantity = num(quantity, 0)
+        entry['mps'] += quantity or 0
+        for group in re.split(r'[;,，；/|]+', str(row.get('platform') or '')):
+            group = group.strip()
+            if group and group not in entry['_platforms']:
+                entry['_platforms'].append(group)
+    result = []
+    for ppn in order:
+        entry = merged[ppn]
+        entry['platform'] = ';'.join(entry.pop('_platforms'))
+        result.append(entry)
+    return result
 
 
 def public_config(config_path=DEFAULT_CONFIG):
@@ -82,6 +206,17 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         if source_path.startswith(('http://', 'https://')):
             os.unlink(filename)
 
+    sheet_headers = {}
+
+    def mapping_for(sheet):
+        if sheet in fm:
+            return fm[sheet]
+        target = norm_key(sheet)
+        for name, mapping in fm.items():
+            if norm_key(name) == target:
+                return mapping
+        return {}
+
     def rows_of(key):
         name = smap.get(key)
         if not name:
@@ -93,25 +228,42 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             if key in ('params', 'lots', 'weekly', 'wip'):
                 return [], []
             raise
+        sheet_headers[name] = header
+        mapping = mapping_for(name)
         required = {
             'mps': ('platform', 'ppn', 'mps'), 'eqp': ('type', 'id'),
             'cards': ('recipe', 'cards'), 'flow': ('prod', 'step', 'recipe', 'time'),
             'borrow': ('date', 'eqp', 'hours'), 'pm': ('eqp', 'early', 'due', 'over', 'hours'),
-            'lots': ('lotId', 'ppn', 'wafer'), 'wip': ('lotId',),
+            'lots': ('lotId', 'wafer'), 'wip': ('lotId',),
         }
         for logical in required.get(key, ()):
-            column = fm.get(name, {}).get(logical)
-            if not column or column not in header:
-                raise ValueError('字段映射不存在：%s.%s → %s' % (name, logical, column))
+            column = mapping.get(logical)
+            if not mapped_column(header, column):
+                if isinstance(column, (list, tuple)):
+                    display = ' / '.join(map(str, column))
+                else:
+                    display = column
+                raise ValueError('字段映射不存在：%s.%s → %s；实际表头：%s'
+                                 % (name, logical, display,
+                                    '、'.join(map(str, header))))
         return header, rows
 
     def field(key, name, default=''):
         sheet = smap.get(key, '')
-        return fm.get(sheet, {}).get(name, default)
+        mapping = mapping_for(sheet)
+        wanted = mapping.get(name, default)
+        header = sheet_headers.get(sheet)
+        if header is None:
+            return wanted if isinstance(wanted, str) else default
+        resolved = mapped_column(header, wanted)
+        if resolved is not None:
+            return resolved
+        return wanted if isinstance(wanted, str) else default
 
     def get(row, key, name, default=''):
         col = field(key, name, default)
-        return row.get(col, default) if col else default
+        value = row.get(col, default) if col else default
+        return value.strip() if isinstance(value, str) else value
 
     def getn(row, key, name, default=0):
         return num(get(row, key, name, default), default)
@@ -128,6 +280,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             raise ValueError('MPS 必须为非负整数 wafer 数：' + ppn)
         mps.append({'platform': str(get(r, 'mps', 'platform', '')).strip(),
                     'ppn': ppn, 'mps': int(quantity)})
+    mps = merge_mps(mps)
     prod_platform = {m['ppn']: m['platform'] for m in mps}
 
     # ---- EQP ----
@@ -145,7 +298,10 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     # ---- Probe cards ----
     _, card_rows = rows_of('cards')
-    sep = fm.get(smap.get('cards', ''), {}).get('separator', ';')
+    sep = mapping_for(smap.get('cards', '')).get('separator', ';')
+    if isinstance(sep, (list, tuple)):
+        sep = sep[0] if sep else ';'
+    sep = sep or ';'
     cards = []
     for r in card_rows:
         recipe = str(get(r, 'cards', 'recipe', '')).strip()
@@ -203,7 +359,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     _, weekly_rows = rows_of('weekly')
     weekly = [{'platform': str(get(r, 'weekly', 'platform', '')).strip(),
-               'ppn': str(get(r, 'weekly', 'ppn', '')).strip(),
+               'ppn': base_ppn(get(r, 'weekly', 'ppn', '')),
                'week': str(get(r, 'weekly', 'week', '')).strip(),
                'start': get(r, 'weekly', 'start', ''), 'end': get(r, 'weekly', 'end', ''),
                'target': int(getn(r, 'weekly', 'target', 0))} for r in weekly_rows]
@@ -260,6 +416,10 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             if not lid:
                 continue
             prod = str(get(r, 'lots', 'ppn', '')).strip()
+            # Actual lot files often encode the flow/product before the first
+            # hyphen (PPN1-1, PPN1-2, ...). The suffix is a vendor marker and
+            # is not part of the product key.
+            prod = flow_product(lid, prod, flows)
             lots.append([
                 lid, prod,
                 str(get(r, 'lots', 'platform', '')).strip() or prod_platform.get(prod, ''),
@@ -328,8 +488,7 @@ def validate_schedule(data):
         return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
 
     def date(value):
-        dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-        return dt.replace(tzinfo=timezone(timedelta(hours=8))) if dt.tzinfo is None else dt
+        return parse_datetime(value)
 
     for key in ('eqp', 'pm', 'borrow', 'wip'):
         require(isinstance(data[key], list), key + ' 必须为记录列表')
@@ -349,18 +508,23 @@ def validate_schedule(data):
         require(type(bake.get(key)) is int and 1 <= bake[key] <= 100, 'BAKE 数量和腔体数必须为 1 至 100 的整数')
     bake_ids = set(bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)]))
     chamber_ids = {e + '-C%d' % c for e in bake_ids for c in range(1, bake['chambers'] + 1)}
-    lots = {r[0]: r for r in data['lots']}
-    require(len(lots) == len(data['lots']), 'LotID 不能重复')
     require(bool(data['mps']), 'MPS 表没有有效数据，请检查字段映射')
-    require(len({m['ppn'] for m in data['mps']}) == len(data['mps']), 'MPS 产品编号不能重复')
+    mps_rows = merge_mps(data['mps'])
+    require(bool(mps_rows), 'MPS 表没有有效数据，请检查字段映射')
+    lot_ids = [r[0] for r in data['lots']]
+    require(all(isinstance(value, str) and value.strip() for value in lot_ids),
+            'LotID 不能为空')
+    lots = set(lot_ids)
     wafer_totals = {}
-    product_ids = {m['ppn'] for m in data['mps']}
+    product_ids = {m['ppn'] for m in mps_rows}
+    flows = data.get('flows') or {}
     for lot in data['lots']:
-        require(lot[1] in product_ids, 'Lot 引用未知 PPN：' + lot[0])
+        product = flow_product(lot[0], lot[1], flows)
+        require(product in product_ids, 'Lot 引用未知 PPN：' + lot[0])
         require(number(lot[3]) and lot[3] == int(lot[3]) and 1 <= lot[3] <= 25,
                 'Lot 的 wafer 片数必须为 1 至 25 的整数：' + lot[0])
-        wafer_totals[lot[1]] = wafer_totals.get(lot[1], 0) + lot[3]
-    for m in data['mps']:
+        wafer_totals[product] = wafer_totals.get(product, 0) + lot[3]
+    for m in mps_rows:
         require(number(m['mps']) and m['mps'] == int(m['mps']) and m['mps'] >= 0,
                 'MPS 必须为非负整数 wafer 数')
         require(wafer_totals.get(m['ppn'], 0) == m['mps'],
@@ -429,8 +593,7 @@ def calendar_issues(data):
     """Check fixed resource plans before committing a configuration."""
     zone = timezone(timedelta(hours=8))
     def date(value):
-        dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-        return dt.replace(tzinfo=zone) if dt.tzinfo is None else dt
+        return parse_datetime(value)
     def overlaps(a, b):
         return a[0] < b[1] and a[1] > b[0]
     def gap(blocks, first, duration, last):

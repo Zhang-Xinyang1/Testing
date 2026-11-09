@@ -168,10 +168,10 @@ def build_rows():
     sheets = [
         ('MPS', [['Platform', 'PPN', 'MPS', '单位']] + mps),
         ('EQP', [['TYPE', 'EQPID', 'Current ProbeCard', 'Current Recipe', 'Status']] + eqp),
-        ('针卡', [['Recipe', 'ProberCard List']] + cards),
-        ('测试flow&工时', [['PROD', 'STEP', 'RECIPE', 'TIME']] + flows),
+        ('针卡', [['Recipe', 'ProbeCard List']] + cards),
+        ('测试flow&工时', [['PROD', 'STEP', 'RECIPE', 'Time']] + flows),
         ('借机计划', [['DATE', 'EQPID', '借机时数']] + borrow),
-        ('PM计划', [['EQPID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours']] + pm),
+        ('PM计划', [['EQP ID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours']] + pm),
         ('约束条件', [['TYPE', 'EQPID', 'Constraint Recipe'],
                      ['CP-A', 'CP-01', recipe(0)],
                      ['CP-B', 'CP-10', recipe(3)]]),

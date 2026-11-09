@@ -26,11 +26,27 @@ def parse_date(value):
     """Parse an ISO/date value to epoch milliseconds, matching the JS helper."""
     if value is None or value == '':
         return None
-    text = str(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    text = text.replace('年', '-').replace('月', '-').replace('日', '')
+    text = text.replace('/', '-')
+    if ' ' in text and 'T' not in text:
+        text = text.replace(' ', 'T', 1)
     if 'T' not in text:
         text += 'T00:00:00+08:00'
     text = text.replace('Z', '+00:00')
-    parsed = datetime.fromisoformat(text)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})'
+                         r'(?:T(\d{1,2}):(\d{2})(?::(\d{2}))?)?', text)
+        if not match:
+            raise
+        parsed = datetime(
+            int(match.group(1)), int(match.group(2)), int(match.group(3)),
+            int(match.group(4) or 0), int(match.group(5) or 0),
+            int(match.group(6) or 0), tzinfo=CST)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=CST)
     return int(parsed.timestamp() * 1000)
@@ -66,6 +82,41 @@ def groups(value):
             if part.strip()]
 
 
+def base_ppn(value):
+    """Product/flow key before the first hyphen; vendor suffix is ignored."""
+    return str(value or '').strip().split('-', 1)[0].strip()
+
+
+def merge_mps(rows):
+    """Merge MPS rows by PPN prefix; multiple orders/vendors are summed."""
+    merged, order = {}, []
+    for row in rows or []:
+        ppn = base_ppn(row.get('ppn', ''))
+        if not ppn:
+            continue
+        if ppn not in merged:
+            merged[ppn] = {'platform': '', 'ppn': ppn, 'mps': 0,
+                           '_platforms': []}
+            order.append(ppn)
+        entry = merged[ppn]
+        quantity = row.get('mps') or 0
+        if isinstance(quantity, str):
+            try:
+                quantity = float(quantity)
+            except ValueError:
+                quantity = 0
+        entry['mps'] += quantity
+        for group in groups(row.get('platform')):
+            if group not in entry['_platforms']:
+                entry['_platforms'].append(group)
+    result = []
+    for ppn in order:
+        entry = merged[ppn]
+        entry['platform'] = ';'.join(entry.pop('_platforms'))
+        result.append(entry)
+    return result
+
+
 def gap(blocks, start, duration):
     current = start
     for begin, end in sorted(blocks, key=lambda span: span[0]):
@@ -97,6 +148,21 @@ class Heap:
         return len(self.a)
 
 
+def flow_product(lot_id, product, flows):
+    """Resolve a lot row to a flow key without trusting the vendor suffix."""
+    if product in flows:
+        return product
+    text = str(lot_id).strip()
+    if text in flows:
+        return text
+    parts = text.split('-')
+    for size in range(len(parts) - 1, 0, -1):
+        prefix = '-'.join(parts[:size]).strip()
+        if prefix in flows:
+            return prefix
+    return product or (parts[0].strip() if parts else '')
+
+
 def _fair(a, b):
     # Lower fair rank first; large total-work products get a small head start.
     a_score = a['fairRank'] - PRODUCT_WORK_WEIGHT * a.get('prodWorkShare', 0)
@@ -109,6 +175,9 @@ def _fair(a, b):
         return -1 if a['prod'] < b['prod'] else 1
     if a['id'] != b['id']:
         return -1 if a['id'] < b['id'] else 1
+    a_key, b_key = a.get('key') or '', b.get('key') or ''
+    if a_key != b_key:
+        return -1 if a_key < b_key else 1
     return 0
 
 
@@ -162,7 +231,7 @@ def _assign_preferred_types(ctx):
             remaining[group] = remaining.get(group, 0) - lot['cpLoadMs']
     flexible = [lot for lot in ctx['lots']
                 if len(lot.get('usableTypes') or []) > 1]
-    for lot in sorted(flexible, key=lambda item: (-item['cpLoadMs'], item['id'])):
+    for lot in sorted(flexible, key=lambda item: (-item['cpLoadMs'], item['id'], item.get('key') or '')):
         group = choose(lot)
         if group is None:
             continue
@@ -199,7 +268,8 @@ def simulate(data, options):
         'batches': [], 'pmRecords': [], 'borrows': [], 'wip': data.get('wip') or [],
     }
 
-    for m in data.get('mps') or []:
+    mps_rows = merge_mps(data.get('mps') or [])
+    for m in mps_rows:
         ctx['prodMps'][m['ppn']] = m['mps']
         ctx['prodPlatform'][m['ppn']] = m['platform']
         ctx['platformMps'][m['platform']] = ctx['platformMps'].get(m['platform'], 0) + m['mps']
@@ -341,16 +411,22 @@ def simulate(data, options):
     for constraint in data.get('constraints') or []:
         forbidden[str(constraint['eqp']) + '|' + str(constraint['recipe'])] = True
 
-    for row in data.get('lots') or []:
+    flows = data.get('flows') or {}
+    for row_number, row in enumerate(data.get('lots') or []):
         if row[0] in excluded:
             continue
         product = row[1]
+        # Prefer the explicit Lot.PPN; fall back to the full lot id or the
+        # prefix before the hyphen (PPN1-1 -> PPN1) when the source only
+        # provides the lot ID.
+        product = flow_product(row[0], product, flows)
         ops = _parse_route(data, product)
         rank = order.get(product, 0)
         order[product] = rank + row[3]
         cp_per_wafer = sum(
             op[2] for op in ops if str(op[0]).startswith('CP'))
         lot = {
+            'key': 'LOT-%06d' % (row_number + 1),
             'id': row[0], 'prod': product, 'platform': row[2], 'type': row[2],
             'wafer': row[3], 'release': row[4], 'week': row[5],
             'weeklyDue': row[6], 'monthlyDue': row[7], 'priority': row[8],
@@ -472,7 +548,7 @@ def simulate(data, options):
             process_ms = op[2] * MIN * lot['wafer']
             end = now + best_setup + process_ms
             task = {
-                'kind': 'cp', 'lotId': lot['id'], 'prod': lot['prod'],
+                'kind': 'cp', 'lotId': lot['id'], 'lotKey': lot['key'], 'prod': lot['prod'],
                 'platform': lot['platform'], 'wafer': lot['wafer'], 'step': op[0],
                 'recipe': op[1], 'timePerWafer': op[2],
                 'duration': process_ms, 'setup': best_setup,
@@ -579,7 +655,7 @@ def simulate(data, options):
     result = finalize(ctx)
     result['schemaVersion'] = 'confirmed-2026-11-06'
     result['productStats'] = []
-    for m in data.get('mps') or []:
+    for m in mps_rows:
         completed_lots = [lot for lot in ctx['lots']
                           if lot['prod'] == m['ppn'] and lot['complete'] <= month_end]
         completed = sum(lot['wafer'] for lot in completed_lots)
@@ -987,7 +1063,7 @@ def compact_result(result):
     for source in compact.get('batches') or []:
         batch = dict(source)
         batch['lots'] = [{
-            'id': lot['id'], 'prod': lot['prod'],
+            'id': lot['id'], 'key': lot.get('key'), 'prod': lot['prod'],
             'platform': lot['platform'], 'wafer': lot['wafer'],
         } for lot in source.get('lots') or []]
         batches.append(batch)

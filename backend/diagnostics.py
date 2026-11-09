@@ -8,6 +8,7 @@ import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
+from server_core import merge_mps
 
 VERSION = 'diag-2-wafer'
 LOCK = threading.Lock()
@@ -49,6 +50,7 @@ def digest(value):
 
 def inspect_run(body):
     data, result = body['input'], body.get('result') or {}
+    mps_rows = merge_mps(data.get('mps', []))
     findings = {}
     def add(code, detail):
         entry = findings.setdefault(code, {'code': code, 'title': CATALOG[code][0],
@@ -87,10 +89,22 @@ def inspect_run(body):
         card = w.get('card') or eqps.get(w.get('eqp'), {}).get('card')
         if False and card and resource:
             reserve('card:' + card, ms(w['start']), ms(w['end']), w['lotId'], 'wip')
-    lot_products={l['id']:l['prod'] for l in result.get('lots', [])}
-    products={m['ppn']:m for m in data.get('mps', [])}
-    releases={r[0]:r[4] for r in data.get('lots', [])}
-    wafer_by_lot={r[0]:r[3] for r in data.get('lots', [])}
+    def lot_key(lot):
+        return lot.get('key') or lot.get('id')
+    lot_products={lot_key(l):l['prod'] for l in result.get('lots', [])}
+    id_products={}
+    for item in result.get('lots', []):
+        id_products.setdefault(item['id'], item['prod'])
+    products={m['ppn']:m for m in mps_rows}
+    releases={}
+    wafer_by_lot={}
+    for index, row in enumerate(data.get('lots', [])):
+        key='LOT-%06d' % (index + 1)
+        releases[key]=row[4]
+        wafer_by_lot[key]=row[3]
+        # Fallback for results produced before unique row keys existed.
+        releases.setdefault(row[0], row[4])
+        wafer_by_lot.setdefault(row[0], row[3])
     by_lot = {}
     for t in tasks:
         start, end = t.get('blockStart', t['start']), t['end']
@@ -98,18 +112,19 @@ def inspect_run(body):
             add('R06', t['lotId'])
         reserve('machine:' + t['machine'], start, end, t['lotId'] + '/' + t['step'], 'cp')
         machine=eqps.get(t['machine'], {})
-        product=products.get(t.get('prod') or lot_products.get(t['lotId']))
+        task_key=t.get('lotKey') or t['lotId']
+        product=products.get(t.get('prod') or lot_products.get(task_key) or id_products.get(t['lotId']))
         allowed=re.split(r'[;,，；/|]+', product.get('platform', '')) if product else []
         cards=next((r['cards'] for r in data.get('recipes', []) if r['recipe']==t.get('recipe')), [])
         denied=any(c['eqp']==t['machine'] and c['recipe']==t.get('recipe') for c in data.get('constraints', []))
         if machine.get('status')!='RUN' or (allowed and machine.get('type') not in allowed) or (cards and t['card'] not in cards) or denied:
             add('R08', t['lotId']+'/'+t['step'])
-        by_lot.setdefault(t['lotId'], []).append(t)
-    for lot, steps in by_lot.items():
+        by_lot.setdefault(task_key, []).append(t)
+    for steps in by_lot.values():
         steps.sort(key=lambda task: task.get('opIndex', task['start']))
         for a, b in zip(steps, steps[1:]):
             if b['start'] < a['end']:
-                add('R03', lot)
+                add('R03', steps[0]['lotId'])
     for b in batches:
         if len(b['lots']) > 4:
             add('R07', b['id'])
@@ -137,17 +152,18 @@ def inspect_run(body):
     month_end = ms(data['meta']['start']) + data['meta']['days'] * 86400000
     flows = data.get('flows', {})
     for lot in result.get('lots', []):
+        key = lot_key(lot)
         if lot['id'] in excluded:
             add('R06', lot['id'])
         if lot.get('unscheduledReason'):
             add('C01', lot['id'] + '：' + lot['unscheduledReason'])
         if lot.get('complete') is not None and lot['complete'] <= month_end:
-            completed[lot['prod']] = completed.get(lot['prod'], 0) + wafer_by_lot.get(lot['id'], lot.get('wafer', 0))
+            completed[lot['prod']] = completed.get(lot['prod'], 0) + wafer_by_lot.get(key, lot.get('wafer', 0))
         route=lot.get('routeTasks', [])
         expected=flows.get(lot['prod'], [])
         if route and len(route)!=len(expected):
             add('R03', lot['id']+'：路线工序数量不符')
-        previous=ms(releases.get(lot['id'], data['meta']['start']))
+        previous=ms(releases.get(key, data['meta']['start']))
         for index, task in enumerate(route):
             if index>=len(expected):
                 break
@@ -158,13 +174,13 @@ def inspect_run(body):
                 add('R03', lot['id']+'：QTIME 不足')
             if str(op[0]).startswith('CP'):
                 expected_ms = op[2] * 60000 * wafer_by_lot.get(
-                    lot['id'], lot.get('wafer', 0))
+                    key, lot.get('wafer', 0))
                 if abs((task['end']-task['start']) - expected_ms) > 0.01:
                     add('R03', lot['id']+'：CP 工时与 wafer 数不符')
             previous=task['end']
         if route and lot.get('complete') != previous:
             add('R03', lot['id']+'：末工序与最终完成时间不一致')
-    for m in data.get('mps', []):
+    for m in mps_rows:
         done = completed.get(m['ppn'], 0)
         if done < m['mps']:
             add('P01', '%s：%d / %d' % (m['ppn'], done, m['mps']))

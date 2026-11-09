@@ -14,9 +14,9 @@
     // Operational timestamps do not alter the scheduling input identity.
     delete input.meta.loadedAt; delete input.meta.configPath;
     var output = result ? {
-      cpTasks: result.cpTasks.map(function (t) { return pick(t, ['lotId','prod','step','recipe','machine','card','start','end','blockStart','opIndex']); }),
-      batches: result.batches.map(function (b) { return {id:b.id, chamber:b.chamber, lots:b.lots.map(function (l) {return l.id;}), wafers:b.wafers, start:b.start,end:b.end,processStart:b.processStart,processEnd:b.processEnd,recipe:b.recipe}; }),
-      lots: result.lots.map(function (l) {return pick(l,['id','prod','wafer','complete','routeTasks','unscheduledReason']);}),
+      cpTasks: result.cpTasks.map(function (t) { return pick(t, ['lotId','lotKey','prod','step','recipe','machine','card','start','end','blockStart','opIndex']); }),
+      batches: result.batches.map(function (b) { return {id:b.id, chamber:b.chamber, lots:b.lots.map(function (l) {return {id:l.id, key:l.key};}), wafers:b.wafers, start:b.start,end:b.end,processStart:b.processStart,processEnd:b.processEnd,recipe:b.recipe}; }),
+      lots: result.lots.map(function (l) {return pick(l,['id','key','prod','wafer','complete','routeTasks','unscheduledReason']);}),
       borrows: result.borrows, pmRecords: result.pmRecords, runMs: result.runMs
     } : null;
     try {

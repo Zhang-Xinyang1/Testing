@@ -26,8 +26,9 @@
     return '<span class="pill">待排</span>';
   }
 
-  function openLotDrawer(lotId) {
-    var lot = A.state.result.lots.filter(function (l) { return l.id === lotId; })[0];
+  function openLotDrawer(lotKey) {
+    var lot = A.state.result.lots.filter(function (l) { return l.key === lotKey; })[0] ||
+      A.state.result.lots.filter(function (l) { return l.id === lotKey; })[0];
     if (!lot) return;
     var html = '<div class="detail-hero"><div class="detail-hero-top">' + pfBadge(lot.platform) + '<h3>' + esc(lot.id) + '</h3>' + lotStatusPill(lot.status) + '</div>' +
       '<p>' + esc(lot.prod) + ' · ' + lot.wafer + ' wafer · MPS 月结 ' + esc(lot.monthlyDue) + '</p>' +
@@ -103,7 +104,7 @@
   function onGlobalClick(e) {
     if (e.target.id === 'gantt-canvas') {
       var hit = A.ganttHit(e);
-      if (hit && hit.type === 'cp') openLotDrawer(hit.data.lotId);
+      if (hit && hit.type === 'cp') openLotDrawer(hit.data.lotKey || hit.data.lotId);
       else if (hit && hit.type === 'bake') openBatchDrawer(hit.data.id);
       else if (hit && hit.type === 'pm') A.toast('PM 维护：' + hit.res.id + ' · ' + fmtDateTime(hit.data[0]) + ' → ' + fmtDateTime(hit.data[1]));
       else if (hit && hit.type === 'borrow') A.toast('借机 ' + hit.data.id + ' · ' + hit.data.eqp + ' · 按指定时间执行');

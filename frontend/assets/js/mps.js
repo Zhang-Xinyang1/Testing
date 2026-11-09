@@ -48,6 +48,7 @@
       mpsKpi(gap < 0 ? 'red' : 'green', '差额', (gap >= 0 ? '+' : '') + num(gap), 'wafer') +
       mpsKpi('amber', '在制另列', num(r.metrics.wipLots || 0), 'lot') + '</div>';
     if (d.meta.lotSizing === 'default-25-tail') html += '<div class="note-card">未提供实际 Lot 明细，当前按每产品 25 片满批加余数尾批生成 '+num(d.lots.length)+' 个 Lot。每 Lot 最多25片；真实拆分可不同。</div>';
+    html += '<div class="note-card">MPS 的 PPN 以第一个 - 前为准，- 后厂家后缀忽略；同一 PPN 多行按 PPN 汇总 wafer，Platform 合并去重。</div>';
     if (r.metrics.unscheduledLots) html += '<div class="note-card">' + num(r.metrics.unscheduledLots) + ' lot 缺少可用资源，请检查机台和针卡。</div>';
     html += '<div class="note-card">优化目标：产品 MPS 达成率均衡。最低产品达成率 '+pct(r.metrics.minProductRate,1)+'，产品达成率平均 '+pct(r.metrics.meanProductRate,1)+'。全厂总量达成率与产品均衡指标分别展示。</div>';
     html += '<div class="dash-grid">' +

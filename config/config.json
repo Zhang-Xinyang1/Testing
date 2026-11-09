@@ -29,14 +29,14 @@
     },
     "针卡": {
       "recipe": "Recipe",
-      "cards": "ProberCard List",
+      "cards": "ProbeCard List",
       "separator": ";"
     },
     "测试flow&工时": {
       "prod": "PROD",
       "step": "STEP",
       "recipe": "RECIPE",
-      "time": "TIME"
+      "time": "Time"
     },
     "借机计划": {
       "date": "DATE",
@@ -44,7 +44,7 @@
       "hours": "借机时数"
     },
     "PM计划": {
-      "eqp": "EQPID",
+      "eqp": "EQP ID",
       "early": "Early Due",
       "due": "Due Date",
       "over": "Over Due",
