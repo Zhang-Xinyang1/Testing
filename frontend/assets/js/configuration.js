@@ -42,7 +42,7 @@
   }
   A.configurationHTML = function () {
     if (A.state.mode !== 'server') return '<div class="card production-config"><div class="card-head"><div><h3>Excel 导入</h3><p>上传只读副本后保存并自动重排，不修改原文件。</p></div></div><div class="card-body">' +
-      '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx" disabled><span class="config-hint">当前为内置算例静态模式，无法上传。请启动后端服务（<code>./run.sh</code>）后访问 <code>http://127.0.0.1:8080</code>。</span></label>' +
+      '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx" disabled><span class="config-hint">当前为内置算例静态模式，无法上传。请启动后端服务（<code>python3 run.py</code>）后访问 <code>http://127.0.0.1:8080</code>。</span></label>' +
       '<div class="note-card">当前页面未连接后端，仅展示内置算例；导入、保存和重新排产不可用。</div></div></div>';
     var c = A.state.config, d = A.state.data, bake = d.bakeResources || {machines:7, chambers:4};
     var borrow = d.borrow.map(function (b) { return Object.assign({}, b, {start:b.start || b.generatedAt || b.date + 'T08:00:00+08:00'}); });
@@ -92,7 +92,7 @@
     // Validate the candidate workbook and scheduling constraints before committing it.
     var preview = await request('api/preview', update);
     if (preview.data.planIssues && preview.data.planIssues.length) throw new Error(preview.data.planIssues.slice(0,5).join('；'));
-    A.SCHED.run(preview.data, A.state.options);
+    await A.SCHED.run(preview.data, A.state.options);
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
     A.updateSourceCard(); A.runSchedule();
@@ -152,17 +152,17 @@
         var output = A.$('#cfg-result');
         if (id === 'cfg-add') {
           data[kind].push(proposal);
-          var test = A.SCHED.run(data, A.state.options);
+          var test = await A.SCHED.run(data, A.state.options);
 
           cfg.scheduling[kind].push(proposal);
           await save(cfg);
         } else if (kind === 'pm') {
           data.pm.push(proposal);
-          var result = A.SCHED.run(data, A.state.options), pm = result.pmRecords[result.pmRecords.length - 1];
+          var result = await A.SCHED.run(data, A.state.options), pm = result.pmRecords[result.pmRecords.length - 1];
           output.textContent = '固定机台 ' + pm.eqp + '，推荐维护时间：' + A.fmtDateTime(pm.start) + ' → ' + A.fmtDateTime(pm.end) + '。点击“添加计划并保存”后生效。';
         } else {
           data.borrow.push(proposal);
-          var trial=A.SCHED.run(data,A.state.options);
+          var trial=await A.SCHED.run(data,A.state.options);
           var request=trial.borrows.find(function(b){return b.req.eqp===proposal.eqp && b.req.date===proposal.date && b.req.hours===proposal.hours;});
           output.textContent=request && request.status!=='cancel' ? '固定机台 '+request.eqp+'，安排时间：'+A.fmtDateTime(request.start)+' → '+A.fmtDateTime(request.end)+'。保存后生效。' : request && request.suggestion ? '当天无法执行，原机台建议：'+A.fmtDateTime(request.suggestion.start)+' → '+A.fmtDateTime(request.suggestion.end)+'。建议尚未执行。' : '原机台不可用，保留未执行计划，不自动换机。';
 

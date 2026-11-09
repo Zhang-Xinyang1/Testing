@@ -21,14 +21,15 @@ STATE = ROOT / '.runtime'
 PIDFILE = STATE / 'process.json'
 LOG = STATE / 'server.log'
 SERVER = BACKEND / 'server.py'
-REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py')
+REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py',
+                    'scheduler.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',
     'assets/enterprise.css',
     'assets/data.js',
     'assets/data-loader.js',
-    'assets/scheduler.js',
+    'assets/schedule-client.js',
     'assets/js/core.js',
     'assets/js/diagnostics.js',
     'assets/js/mps.js',
@@ -42,6 +43,7 @@ REQUIRED_FRONTEND = (
 FRONTEND_MARKERS = (
     'id="app"',
     'id="btn-import"',
+    'assets/schedule-client.js',
     'assets/js/core.js',
     'assets/js/inputs.js',
     'assets/js/configuration.js',
@@ -398,9 +400,9 @@ def service():
     if platform.system() != 'Linux' or not shutil.which('systemctl'):
         fail('开机自启仅支持使用 systemd 的 Linux。')
     if os.geteuid() == 0:
-        fail('请使用实际运行账号执行 deploy.sh install-service，不要 sudo 整个脚本。')
+        fail('请使用实际运行账号执行 python3 deploy.py install-service，不要 sudo 整个脚本。')
     if running():
-        fail('请先运行 ./deploy.sh stop，避免与后台模式争用端口。')
+        fail('请先运行 python3 deploy.py stop，避免与后台模式争用端口。')
     config, host, port = check()
     if any(c in str(ROOT) + str(config) + sys.executable for c in '\n\r%"\\'):
         fail('服务路径包含 systemd 不支持的特殊字符，请换用简单目录。')

@@ -39,8 +39,8 @@
   A.esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); };
   A.pct = function (v, d) { return (v * 100).toFixed(d == null ? 1 : d) + '%'; };
   A.num = function (v) { return Math.round(v).toLocaleString('en-US'); };
-  A.fmtDate = function (ms) { if (!isFinite(ms)) return '—'; var d = new Date(ms + 8 * HOUR); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
-  A.fmtDateTime = function (ms) { return isFinite(ms) ? A.fmtDate(ms) + ' ' + SCHED.fmt(ms, false) : '—'; };
+  A.fmtDate = function (ms) { if (ms == null || !isFinite(ms)) return '—'; var d = new Date(ms + 8 * HOUR); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
+  A.fmtDateTime = function (ms) { return ms != null && isFinite(ms) ? A.fmtDate(ms) + ' ' + SCHED.fmt(ms, false) : '—'; };
   A.pad2 = function (n) { return n < 10 ? '0' + n : '' + n; };
   A.bar = function (v, cls) { return '<div class="bar ' + (cls || '') + '"><span style="width:' + (Math.max(0, Math.min(1, v)) * 100).toFixed(1) + '%"></span></div>'; };
   A.pfBadge = function (p) { return '<span class="platform-badge pf-' + A.esc(p) + '">' + A.esc(p) + '</span>'; };
@@ -65,7 +65,20 @@
       A.state.loadError = res.error;
       A.updateSourceCard();
       A.syncNav();
-      A.runSchedule();
+      if (res.mode !== 'server' && window.DEMO_RESULT) {
+        A.state.result = window.DEMO_RESULT;
+        if (!A.state.gantt.anchor) A.state.gantt.anchor = A.state.result.start;
+        A.hideLoading();
+        A.updateRunChip();
+        A.renderView();
+      } else if (res.mode !== 'server') {
+        A.hideLoading();
+        A.$('#run-chip').textContent = '静态模式';
+        A.renderView();
+        A.toast('静态模式不执行排产，请使用 Python 服务地址');
+      } else {
+        A.runSchedule();
+      }
       if (res.error) A.toast('API 不可用，已使用内置 demo 数据：' + res.error);
     }).catch(function (err) {
       console.error(err);
@@ -121,7 +134,7 @@
 
   A.openExcelImport = function () {
     if (A.state.mode !== 'server') {
-      A.toast('Excel 导入需要启动后端服务：运行 ./run.sh 后访问 http://127.0.0.1:8080');
+      A.toast('Excel 导入需要启动后端服务：运行 python3 run.py 后访问 http://127.0.0.1:8080');
       return;
     }
     A.navigate('inputs');
@@ -131,11 +144,15 @@
 
   A.runSchedule = function () {
     if (!A.state.data) return;
+    if (A.state.mode !== 'server') {
+      A.toast('静态模式不执行排产，请启动 Python 服务');
+      return;
+    }
     A.showLoading('正在排产', A.num(A.state.data.lots.length) + ' lot');
     setTimeout(async function () {
       try {
         var t0 = performance.now();
-        var res = SCHED.run(A.state.data, A.state.options);
+        var res = await SCHED.run(A.state.data, A.state.options);
         A.state.result = res;
         if (A.recordDiagnostics) await A.recordDiagnostics(res, null);
         if (!A.state.gantt.anchor) A.state.gantt.anchor = res.start;
@@ -171,7 +188,15 @@
   };
   A.renderView = function () {
     if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
-    if (!A.state.result) return;
+    if (!A.state.result) {
+      var el = A.$('#view-' + A.state.view);
+      if (el && A.state.mode !== 'server') {
+        el.innerHTML = '<div class="error-box"><b>静态模式仅展示内置数据</b>' +
+          '\n排产由 Python 后端执行。请运行 <code>python3 run.py</code>，' +
+          '然后访问 <code>http://127.0.0.1:8080</code>。</div>';
+      }
+      return;
+    }
     if (A.state.view === 'mps') A.renderMps();
     else if (A.state.view === 'gantt') A.renderGantt();
     else if (A.state.view === 'inputs') A.renderInputs();

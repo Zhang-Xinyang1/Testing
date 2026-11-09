@@ -19,9 +19,9 @@
     "completedWafers": 11000,
     "wipWafers": 0,
     "unscheduledLots": 0,
-    "completionRate": 1,
+    "completionRate": 1.0,
     "onTime": 476,
-    "onTimeRate": 1,
+    "onTimeRate": 1.0,
     "lateWeek": 0,
     "lateMonth": 0,
     "cpOps": 1610,
@@ -42,31 +42,31 @@
     "borrowScheduled": 119,
     "borrowCanceled": 0,
     "borrowDelayed": 0,
-    "borrowCancelRate": 0,
+    "borrowCancelRate": 0.0,
     "borrowMaxDelay": 0,
-    "cpMakespan": 1789005900000,
-    "bakeMakespan": 1789007520000,
-    "makespan": 1789007520000,
+    "cpMakespan": 1789005900000.0,
+    "bakeMakespan": 1789007520000.0,
+    "makespan": 1789007520000.0,
     "horizonDays": 9.438888888888888,
-    "minProductRate": 1,
-    "meanProductRate": 1
+    "minProductRate": 1.0,
+    "meanProductRate": 1.0
   },
   "trials": [
     {
       "bakeWindowHours": 0,
-      "minProductRate": 1,
+      "minProductRate": 1.0,
       "completedMonth": 476,
       "completedWafers": 11000
     },
     {
       "bakeWindowHours": 4,
-      "minProductRate": 1,
+      "minProductRate": 1.0,
       "completedMonth": 476,
       "completedWafers": 11000
     },
     {
       "bakeWindowHours": 8,
-      "minProductRate": 1,
+      "minProductRate": 1.0,
       "completedMonth": 476,
       "completedWafers": 11000
     }
@@ -90,7 +90,7 @@
       "completed": 800,
       "completedWafers": 800,
       "completedLots": 32,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -101,7 +101,7 @@
       "completed": 2,
       "completedWafers": 2,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -112,7 +112,7 @@
       "completed": 161,
       "completedWafers": 161,
       "completedLots": 7,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -123,7 +123,7 @@
       "completed": 30,
       "completedWafers": 30,
       "completedLots": 2,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -134,7 +134,7 @@
       "completed": 131,
       "completedWafers": 131,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -145,7 +145,7 @@
       "completed": 182,
       "completedWafers": 182,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -156,7 +156,7 @@
       "completed": 125,
       "completedWafers": 125,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -167,7 +167,7 @@
       "completed": 129,
       "completedWafers": 129,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -178,7 +178,7 @@
       "completed": 221,
       "completedWafers": 221,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -189,7 +189,7 @@
       "completed": 100,
       "completedWafers": 100,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -200,7 +200,7 @@
       "completed": 205,
       "completedWafers": 205,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -211,7 +211,7 @@
       "completed": 166,
       "completedWafers": 166,
       "completedLots": 7,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -222,7 +222,7 @@
       "completed": 21,
       "completedWafers": 21,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -233,7 +233,7 @@
       "completed": 48,
       "completedWafers": 48,
       "completedLots": 2,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -244,7 +244,7 @@
       "completed": 214,
       "completedWafers": 214,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -255,7 +255,7 @@
       "completed": 91,
       "completedWafers": 91,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -266,7 +266,7 @@
       "completed": 222,
       "completedWafers": 222,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -277,7 +277,7 @@
       "completed": 180,
       "completedWafers": 180,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -288,7 +288,7 @@
       "completed": 147,
       "completedWafers": 147,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -299,7 +299,7 @@
       "completed": 66,
       "completedWafers": 66,
       "completedLots": 3,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -310,7 +310,7 @@
       "completed": 141,
       "completedWafers": 141,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -321,7 +321,7 @@
       "completed": 180,
       "completedWafers": 180,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -332,7 +332,7 @@
       "completed": 218,
       "completedWafers": 218,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -343,7 +343,7 @@
       "completed": 188,
       "completedWafers": 188,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -354,7 +354,7 @@
       "completed": 171,
       "completedWafers": 171,
       "completedLots": 7,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -365,7 +365,7 @@
       "completed": 129,
       "completedWafers": 129,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -376,7 +376,7 @@
       "completed": 247,
       "completedWafers": 247,
       "completedLots": 10,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -387,7 +387,7 @@
       "completed": 108,
       "completedWafers": 108,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -398,7 +398,7 @@
       "completed": 160,
       "completedWafers": 160,
       "completedLots": 7,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -409,7 +409,7 @@
       "completed": 138,
       "completedWafers": 138,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -420,7 +420,7 @@
       "completed": 200,
       "completedWafers": 200,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -431,7 +431,7 @@
       "completed": 230,
       "completedWafers": 230,
       "completedLots": 10,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -442,7 +442,7 @@
       "completed": 244,
       "completedWafers": 244,
       "completedLots": 10,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -453,7 +453,7 @@
       "completed": 193,
       "completedWafers": 193,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -464,7 +464,7 @@
       "completed": 45,
       "completedWafers": 45,
       "completedLots": 2,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -475,7 +475,7 @@
       "completed": 106,
       "completedWafers": 106,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -486,7 +486,7 @@
       "completed": 217,
       "completedWafers": 217,
       "completedLots": 9,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -497,7 +497,7 @@
       "completed": 2,
       "completedWafers": 2,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -508,7 +508,7 @@
       "completed": 96,
       "completedWafers": 96,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -519,7 +519,7 @@
       "completed": 52,
       "completedWafers": 52,
       "completedLots": 3,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -530,7 +530,7 @@
       "completed": 26,
       "completedWafers": 26,
       "completedLots": 2,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -541,7 +541,7 @@
       "completed": 79,
       "completedWafers": 79,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -552,7 +552,7 @@
       "completed": 11,
       "completedWafers": 11,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -563,7 +563,7 @@
       "completed": 387,
       "completedWafers": 387,
       "completedLots": 16,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -574,7 +574,7 @@
       "completed": 176,
       "completedWafers": 176,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -585,7 +585,7 @@
       "completed": 56,
       "completedWafers": 56,
       "completedLots": 3,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -596,7 +596,7 @@
       "completed": 60,
       "completedWafers": 60,
       "completedLots": 3,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -607,7 +607,7 @@
       "completed": 186,
       "completedWafers": 186,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -618,7 +618,7 @@
       "completed": 100,
       "completedWafers": 100,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -629,7 +629,7 @@
       "completed": 347,
       "completedWafers": 347,
       "completedLots": 14,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -640,7 +640,7 @@
       "completed": 309,
       "completedWafers": 309,
       "completedLots": 13,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -651,7 +651,7 @@
       "completed": 115,
       "completedWafers": 115,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -662,7 +662,7 @@
       "completed": 2,
       "completedWafers": 2,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -673,7 +673,7 @@
       "completed": 15,
       "completedWafers": 15,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -684,7 +684,7 @@
       "completed": 249,
       "completedWafers": 249,
       "completedLots": 10,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -695,7 +695,7 @@
       "completed": 258,
       "completedWafers": 258,
       "completedLots": 11,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -706,7 +706,7 @@
       "completed": 105,
       "completedWafers": 105,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -717,7 +717,7 @@
       "completed": 2,
       "completedWafers": 2,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -728,7 +728,7 @@
       "completed": 152,
       "completedWafers": 152,
       "completedLots": 7,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -739,7 +739,7 @@
       "completed": 33,
       "completedWafers": 33,
       "completedLots": 2,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -750,7 +750,7 @@
       "completed": 117,
       "completedWafers": 117,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -761,7 +761,7 @@
       "completed": 378,
       "completedWafers": 378,
       "completedLots": 16,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -772,7 +772,7 @@
       "completed": 19,
       "completedWafers": 19,
       "completedLots": 1,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -783,7 +783,7 @@
       "completed": 271,
       "completedWafers": 271,
       "completedLots": 11,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -794,7 +794,7 @@
       "completed": 110,
       "completedWafers": 110,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -805,7 +805,7 @@
       "completed": 84,
       "completedWafers": 84,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -816,7 +816,7 @@
       "completed": 264,
       "completedWafers": 264,
       "completedLots": 11,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -827,7 +827,7 @@
       "completed": 273,
       "completedWafers": 273,
       "completedLots": 11,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -838,7 +838,7 @@
       "completed": 184,
       "completedWafers": 184,
       "completedLots": 8,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -849,7 +849,7 @@
       "completed": 109,
       "completedWafers": 109,
       "completedLots": 5,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -860,7 +860,7 @@
       "completed": 141,
       "completedWafers": 141,
       "completedLots": 6,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     },
     {
@@ -871,7 +871,7 @@
       "completed": 76,
       "completedWafers": 76,
       "completedLots": 4,
-      "rate": 1,
+      "rate": 1.0,
       "gap": 0
     }
   ]

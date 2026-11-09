@@ -96,6 +96,11 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(Path(uploaded['path']).read_bytes(), workbook.read_bytes())
                 self.assertIn('MPS', uploaded['sheets'])
                 self.assertEqual(config.read_bytes(), original)
+                scheduled = post('/api/schedule', {'data': self.data, 'options': {}})
+                self.assertTrue(scheduled['ok'])
+                self.assertEqual(scheduled['result']['metrics']['totalLots'],
+                                 len(self.data['lots']))
+                self.assertEqual(scheduled['result']['metrics']['completedWafers'], 11000)
                 reserved = post('/api/oracle/config', {'host': 'db.internal', 'port': 1521,
                     'service': 'MES', 'user': 'readonly', 'passwordEnv': 'ORACLE_PASSWORD', 'views': {'mps': 'MES.V_MPS'}})
                 self.assertEqual(reserved['status'], 'reserved')

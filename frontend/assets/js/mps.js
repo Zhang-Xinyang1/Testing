@@ -13,10 +13,11 @@
     r.lots.forEach(function (l) { (byProd[l.prod] = byProd[l.prod] || []).push(l); });
     return (d.mps || []).map(function (m) {
       var arr = byProd[m.ppn] || [];
-      var done = arr.filter(function (l) { return l.complete <= r.monthEnd; });
+      var done = arr.filter(function (l) { return l.complete != null && l.complete <= r.monthEnd; });
       var completedWafers=done.reduce(function(s,l){return s+l.wafer;},0);
-      var first = arr.length ? Math.min.apply(null, arr.map(function (l) { return l.complete; })) : NaN;
-      var last = arr.length ? Math.max.apply(null, arr.map(function (l) { return l.complete; })) : NaN;
+      var completes = arr.map(function (l) { return l.complete; }).filter(function (v) { return Number.isFinite(v); });
+      var first = completes.length ? Math.min.apply(null, completes) : NaN;
+      var last = completes.length ? Math.max.apply(null, completes) : NaN;
       var inProcess = wipByProd[m.ppn] || 0;
       return {
         platform: m.platform, ppn: m.ppn, mps: m.mps, lots: arr.length,

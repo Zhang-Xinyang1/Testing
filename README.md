@@ -1,30 +1,30 @@
 # XMC 测试排产
 
-读取历史 XLSX，配置机台、在制占用、PM 和借机，比较 Excel MPS 与算法月内完成量。原始 Excel 只读，配置独立保存，算法在浏览器运行。
+读取历史 XLSX，配置机台、在制占用、PM 和借机，比较 Excel MPS 与算法月内完成量。原始 Excel 只读，配置独立保存；排产算法、测试与启动脚本均由 Python 运行，浏览器只负责展示和交互。
 
 ## 服务器一键部署
 
-上传整个 Testing 文件夹：Windows 双击 `一键启动.bat`，macOS 双击 `一键启动.command`（Linux/macOS 终端也可执行 `bash 一键启动.sh`）。脚本会先校验后端文件、前端入口与静态资源、Excel 数据和端口，再后台启动服务，并确认 `/api/health`、首页和 `/api/data` 均可用；桌面环境自动打开本机浏览器。启动后访问 `http://服务器IP:8080`。详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
+上传整个 Testing 文件夹。Windows 可双击 `一键启动.py`（`.py` 已关联 Python 时）或执行 `py -3 一键启动.py`；macOS/Linux 在终端执行 `python3 一键启动.py`。脚本会先校验后端文件、前端入口与静态资源、Excel 数据和端口，再后台启动服务，并确认 `/api/health`、首页和 `/api/data` 均可用；桌面环境自动打开本机浏览器。启动后访问 `http://服务器IP:8080`。详细说明见 [部署说明](部署说明.md)。需预装 Python 3.9+。
 
 | 操作 | Windows | Linux / macOS |
 |---|---|---|
-| 启动 | 双击 `一键启动.bat` | macOS 双击 `一键启动.command`；Linux 执行 `bash 一键启动.sh` |
-| 停止 | 双击 `停止服务.bat` | `bash 停止服务.sh` |
-| 重启 | 双击 `重启服务.bat` | `bash 重启服务.sh` |
-| 状态 | `deploy.bat status` | `bash deploy.sh status` |
-| 检查 | `deploy.bat check` | `bash deploy.sh check` |
-| 日志 | `deploy.bat logs` | `bash deploy.sh logs` |
+| 启动 | 双击 `一键启动.py` 或 `py -3 一键启动.py` | `python3 一键启动.py` |
+| 停止 | 双击 `停止服务.py` 或 `py -3 停止服务.py` | `python3 停止服务.py` |
+| 重启 | 双击 `重启服务.py` 或 `py -3 重启服务.py` | `python3 重启服务.py` |
+| 状态 | `py -3 deploy.py status` | `python3 deploy.py status` |
+| 检查 | `py -3 deploy.py check` | `python3 deploy.py check` |
+| 日志 | `py -3 deploy.py logs` | `python3 deploy.py logs` |
 
-Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏览器；SSH/无界面服务器只打印访问地址。前端与 API 由同一个 Python 服务同源提供，无需单独构建或配置前端地址。更新后端或配置后请执行重启；只更新前端静态资源时刷新页面即可。关闭启动窗口后服务继续运行，但普通后台模式不保证退出登录或重启后恢复。Linux systemd 开机自启为可选操作，Windows 暂未集成开机自启。
+Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏览器；SSH/无界面服务器只打印访问地址。前端与 API 由同一个 Python 服务同源提供，排产通过 `POST /api/schedule` 在 Python 后端执行，无需 Node.js、npm 或前端构建。更新后端或配置后请执行重启；只更新前端静态资源时刷新页面即可。关闭启动窗口后服务继续运行，但普通后台模式不保证退出登录或重启后恢复。Linux systemd 开机自启为可选操作，Windows 暂未集成开机自启。
 
 ## 开发启动
 
 ```bash
-./run.sh
+python3 run.py
 # 打开 http://127.0.0.1:8080
 ```
 
-请使用后端地址，不是 IDE 的静态 Live Server。静态模式只能看内置算例，不能上传保存。
+请使用后端地址，不是 IDE 的静态 Live Server。静态模式只展示内置数据，不能上传保存，也不执行排产；排产由 Python 后端通过 `/api/schedule` 完成。
 
 ## 使用
 
@@ -32,7 +32,7 @@ Windows 与带图形界面的 Linux/macOS 启动成功会自动打开本机浏�
 
 规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认六种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
 
-**当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务。
+**当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务；需要重建合成算例时运行 `python3 tools/build_case.py`。
 
 规则 PPT 与重跑结果在 `output/`；旧算例与旧 PPT 已删除。
 
@@ -46,8 +46,9 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 
 ## 技术文档
 
+- [Python 统一改造说明](docs/technical/Python统一改造说明.md)：算法迁移、接口、脚本和验证结果。
 - [前端技术文档](docs/technical/前端技术文档.md)：模块、交互、排产规则、图示及现场限制。
-- [后端技术文档](docs/technical/后端技术文档.md)：上传、接口、校验、Oracle 扩展、部署与安全。
+- [后端技术文档](docs/technical/后端技术文档.md)：上传、排产接口、校验、Oracle 扩展、部署与安全。
 - [运行环境与依赖说明](docs/technical/环境依赖说明.md)：Python、可选第三方库、浏览器和测试工具版本。
 - [部署说明](部署说明.md)：跨平台一键启动、离线环境、维护与故障排查。
 - [品牌素材来源](frontend/assets/brand/README.md)。
@@ -55,13 +56,14 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 ## 验证
 
 ```bash
-bash deploy.sh check
+python3 deploy.py check
 python3 -m unittest discover -s tests -v
-python3 -m py_compile backend/server.py backend/server_core.py backend/data_sources.py backend/diagnostics.py deployment/manage.py
+python3 -m py_compile backend/server.py backend/server_core.py backend/data_sources.py backend/diagnostics.py backend/scheduler.py deployment/manage.py
+python3 tools/verify_metrics.py
 ```
 
 Windows 可使用 `py -3 -m unittest discover -s tests -v`。部署进程身份检查用例为 `tests/test_deployment.py`；Windows 实机双击及 Linux systemd 安装仍需在目标环境验收。
 
-JavaScript 回归用例为 `tests/scheduler.test.js`，在加载 `frontend/assets/scheduler.js` 后执行；全算例独立核验脚本为 `.artifacts/verify_metrics.js`。
+排产规则回归为 `tests/test_scheduler.py`；全算例独立核验脚本为 `tools/verify_metrics.py`。迁移前后的详细对应关系见 [Python 统一改造说明](docs/technical/Python统一改造说明.md)。
 
 当前是启发式原型，并非最优解求解器。现场上线前需完成认证授权、滚动快照、真实路线、日历、并发与安全加固；详见技术文档。

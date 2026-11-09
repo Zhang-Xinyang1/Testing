@@ -6,9 +6,11 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
-from server_core import ROOT, DEFAULT_CONFIG, load_config, public_config, build_payload, read_workbook
+from server_core import (ROOT, DEFAULT_CONFIG, load_config, public_config,
+                         build_payload, read_workbook, validate_schedule)
 from data_sources import oracle_settings
 from diagnostics import history, record_run
+from scheduler import compact_result, run_schedule
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -56,7 +58,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         endpoint = urlparse(self.path).path
-        if endpoint not in ('/api/config', '/api/preview', '/api/uploads', '/api/oracle/config', '/api/runs'):
+        if endpoint not in ('/api/config', '/api/preview', '/api/uploads',
+                            '/api/oracle/config', '/api/runs', '/api/schedule'):
             return self._json({'error': 'Unknown endpoint'}, 404)
         # Configuration writes are same-origin, even when deployed behind a proxy.
         from urllib.parse import urlsplit
@@ -67,11 +70,14 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             if endpoint == '/api/uploads':
                 return self.upload_excel(length)
-            if not 0 < length <= (40_000_000 if endpoint == '/api/runs' else 2_000_000):
-                raise ValueError('配置大小无效')
+            limit = 40_000_000 if endpoint in ('/api/runs', '/api/schedule') else 2_000_000
+            if not 0 < length <= limit:
+                raise ValueError('请求大小无效')
             update = json.loads(self.rfile.read(length))
             if endpoint == '/api/runs':
                 return self._json({'ok': True, 'report': record_run(self.server.config_path, update)})
+            if endpoint == '/api/schedule':
+                return self.schedule(update)
             if endpoint == '/api/oracle/config':
                 settings = oracle_settings(update)
                 with CONFIG_LOCK:
@@ -93,6 +99,26 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({'ok': True, 'data': payload, 'config': public_config(self.server.config_path)})
         except Exception as e:
             return self._json({'ok': False, 'error': str(e)}, 400)
+
+    def schedule(self, body):
+        """Run the Python scheduling engine for the current or supplied input."""
+        if not isinstance(body, dict):
+            raise ValueError('排产请求必须是 JSON 对象')
+        options = body.get('options') or {}
+        if not isinstance(options, dict):
+            raise ValueError('排产选项必须是 JSON 对象')
+        data = body.get('data')
+        if data is None:
+            data = build_payload(self.server.config_path)
+        if not isinstance(data, dict):
+            raise ValueError('排产数据必须是 JSON 对象')
+        missing = [key for key in ('meta', 'mps', 'eqp', 'flows', 'recipes', 'lots')
+                   if key not in data]
+        if missing:
+            raise ValueError('排产数据缺少字段：' + '、'.join(missing))
+        validate_schedule(data)
+        return self._json({'ok': True,
+                           'result': compact_result(run_schedule(data, options))})
 
     def persist_config(self, cfg):
         fd, temp = tempfile.mkstemp(dir=os.path.dirname(self.server.config_path), suffix='.tmp')
