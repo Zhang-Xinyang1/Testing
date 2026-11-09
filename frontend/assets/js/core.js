@@ -142,32 +142,47 @@
     if (input) input.click();
   };
 
-  A.runSchedule = function () {
+  function inputSignature(data) {
+    var snapshot = JSON.parse(JSON.stringify(data));
+    if (snapshot.meta) delete snapshot.meta.loadedAt;
+    return JSON.stringify(snapshot);
+  }
+  A.canReuseSchedule = function (cached, input, options) {
+    return !!(cached && cached.result && cached.input &&
+      inputSignature(cached.input) === inputSignature(input) &&
+      JSON.stringify(cached.options) === JSON.stringify(options));
+  };
+  A.runSchedule = async function (cached) {
     if (!A.state.data) return;
     if (A.state.mode !== 'server') {
       A.toast('静态模式不执行排产，请启动 Python 服务');
       return;
     }
-    A.showLoading('正在排产', A.num(A.state.data.lots.length) + ' lot');
-    setTimeout(async function () {
+    var sequence = A.state.runSequence = (A.state.runSequence || 0) + 1;
+    var snapshot = {input:JSON.parse(JSON.stringify(A.state.data)), options:JSON.parse(JSON.stringify(A.state.options))};
+    A.state.result = null;
+    A.showLoading('正在排产', A.num(snapshot.input.lots.length) + ' lot');
       try {
         var t0 = performance.now();
-        var res = await SCHED.run(A.state.data, A.state.options);
+        var res = A.canReuseSchedule(cached, snapshot.input, snapshot.options) ? cached.result : await SCHED.run(snapshot.input, snapshot.options);
+        if (sequence !== A.state.runSequence) return;
         A.state.result = res;
-        if (A.recordDiagnostics) await A.recordDiagnostics(res, null);
+        if (A.recordDiagnostics) await A.recordDiagnostics(res, null, snapshot);
+        if (sequence !== A.state.runSequence) return;
         if (!A.state.gantt.anchor) A.state.gantt.anchor = res.start;
         A.hideLoading();
         A.updateRunChip();
         A.renderView();
         A.toast('排产完成：' + A.num(res.metrics.completedWafers) + ' / ' + A.num(res.metrics.totalWafers) + ' wafer（' + A.num(res.metrics.completedLots) + ' lots）在月内完成 · ' + Math.round(performance.now() - t0) + ' ms');
       } catch (err) {
+        if (sequence !== A.state.runSequence) return;
         console.error(err);
         A.hideLoading();
-        if (A.recordDiagnostics) await A.recordDiagnostics(null, err);
+        if (A.recordDiagnostics) await A.recordDiagnostics(null, err, snapshot);
+        if (sequence !== A.state.runSequence) return;
         A.toast('排产失败：' + err.message);
         if (A.renderDiagnostics) A.navigate('diagnostics');
       }
-    }, 60);
   };
 
   A.showLoading = function (title, sub) {
@@ -188,6 +203,7 @@
   };
   A.renderView = function () {
     if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
+    if (A.state.view === 'inputs' && A.state.data && A.state.mode === 'server') { A.renderInputs(); return; }
     if (!A.state.result) {
       var el = A.$('#view-' + A.state.view);
       if (el && A.state.mode !== 'server') {

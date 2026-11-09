@@ -116,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
                    if key not in data]
         if missing:
             raise ValueError('排产数据缺少字段：' + '、'.join(missing))
-        validate_schedule(data)
+        data = validate_schedule(data)
         return self._json({'ok': True,
                            'result': compact_result(run_schedule(data, options))})
 

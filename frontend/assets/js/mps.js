@@ -8,8 +8,9 @@
     var d = A.state.data, r = A.state.result;
     var byProd = {};
     var lotProducts = {}, wipByProd = {};
-    d.lots.forEach(function (l) { lotProducts[l[0]] = l[1]; });
-    (d.wip || []).forEach(function (w) { var p = lotProducts[w.lotId]; wipByProd[p] = (wipByProd[p] || 0) + 1; });
+    var productsByKey = {};
+    d.lots.forEach(function (l, i) { lotProducts[l[0]] = l[1]; productsByKey['LOT-' + String(i + 1).padStart(6, '0')] = l[1]; });
+    (r.wip || []).forEach(function (w) { var p = w.lotKey ? productsByKey[w.lotKey] : lotProducts[w.lotId]; wipByProd[p] = (wipByProd[p] || 0) + 1; });
     r.lots.forEach(function (l) { (byProd[l.prod] = byProd[l.prod] || []).push(l); });
     return (d.mps || []).map(function (m) {
       var arr = byProd[m.ppn] || [];
@@ -51,6 +52,10 @@
     html += '<div class="note-card">MPS 的 PPN 以第一个 - 前为准，- 后厂家后缀忽略；同一 PPN 多行按 PPN 汇总 wafer，Platform 合并去重。</div>';
     if (r.metrics.unscheduledLots) html += '<div class="note-card">' + num(r.metrics.unscheduledLots) + ' lot 缺少可用资源，请检查机台和针卡。</div>';
     html += '<div class="note-card">优化目标：产品 MPS 达成率均衡。最低产品达成率 '+pct(r.metrics.minProductRate,1)+'，产品达成率平均 '+pct(r.metrics.meanProductRate,1)+'。全厂总量达成率与产品均衡指标分别展示。</div>';
+    if (r.optimization && r.optimization.algorithm === 'search') {
+      var opt = r.optimization;
+      html += '<div class="note-card">已比较 '+num(opt.evaluations)+' 个候选排程。原方案 → 选中方案：最低产品达成率 '+pct(opt.baseline.minProductRate,1)+' → '+pct(opt.selected.minProductRate,1)+'；月内完成 '+num(opt.baseline.completedWafers)+' → '+num(opt.selected.completedWafers)+' wafer。优先改善低达成率产品，未证明全局最优。</div>';
+    }
     html += '<div class="dash-grid">' +
       '<div class="card"><div class="card-head"><div><h3>平台完成量</h3></div><span class="pill ' + (gap < 0 ? 'red' : 'green') + '">' + (gap < 0 ? '存在缺口' : 'MPS 达成') + '</span></div>' +
         '<div class="card-body">' + platformMpsChart(rows) + '</div></div>' +

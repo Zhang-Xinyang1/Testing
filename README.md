@@ -32,7 +32,7 @@ python3 run.py
 
 当前仅使用 `data/Testing调度算例_新版.xlsx`。新版按 2026-11-06 逐项确认、2026-11-09 修订 CP 工时口径的业务规则重建：72 个 PPN、11,000 wafer、三个 CP 机台组、31 个 CP Recipe、62 种针卡类型、119 条借机，7 台 OVEN × 4 腔。MPS 允许同一 PPN 多行（不同厂家或重复订单）；PPN 以第一个 `-` 前为准，`-` 后厂家后缀忽略，读取时按前缀汇总 wafer、合并 Platform，并用前缀匹配 flow.PROD。每 Lot 最多 25 片；没有实际 Lot 明细时默认满 25 片加尾批，当前共 476 Lot。实际 Lot 明细优先；同一 LotID 允许多行，按 LotID 第一个 `-` 前的前缀匹配 flow，`-` 后作为厂家标识不参与路线匹配，每行独立排产。BAKE 每批最多 4 Lot，无额外 wafer 总数限制；升温 2h、加工 24h、降温/换 Lot 2h，占腔 28h，Lot 在第 26h 放行。
 
-规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认七种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工；CP 工时按 `Time`（分钟/wafer）× Lot 实际 wafer 数计算。可跨组 Lot 先按各组剩余 CP 机时预分配，优先使用非瓶颈组。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
+规则详见 [业务确认清单](docs/排程业务规则_确认清单.md)。CP 按 RUN 资格及 Platform/TYPE 匹配，路线限定已确认七种模式并保留原表顺序，针卡数量充足、换类型 5 分钟，约束表为禁加工；CP 工时按 `Time`（分钟/wafer）× Lot 实际 wafer 数计算。默认采用多起点与局部搜索，可跨组 Lot 按每道 CP 的兼容资源选择机台；保留原预分组贪心方案作为基线。MPS、月内完成量与各 PPN 达成率均按 wafer 统计；优化目标是各 PPN 月末达成率均衡。
 
 **当前工作区没有真实 72 产品表，默认文件是新规则的合成验证算例。** CP 暂保留 27 台、三个组各 9 台，路线/工时/计划逐条内容为占位。合成 MPS 的 PPN 使用 `PPNxx-1` 形式，flow 的 `PROD` 使用 `PPNxx`，用于验证 `-` 后厂家后缀忽略逻辑。验证结果不能作为现场生产承诺。真实表替换后重新运行 `python3 tools/build_data.py` 并重启服务；需要重建合成算例时运行 `python3 tools/build_case.py`。
 
@@ -49,6 +49,7 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 ## 技术文档
 
 - [Python 统一改造说明](docs/technical/Python统一改造说明.md)：算法迁移、接口、脚本和验证结果。
+- [排程算法与优化验证](docs/technical/排程算法与优化验证.md)：LotID 修复核验、原算法结构、多起点局部搜索与压力测试结果。
 - [前端技术文档](docs/technical/前端技术文档.md)：模块、交互、排产规则、图示及现场限制。
 - [后端技术文档](docs/technical/后端技术文档.md)：上传、排产接口、校验、Oracle 扩展、部署与安全。
 - [运行环境与依赖说明](docs/technical/环境依赖说明.md)：Python、可选第三方库、浏览器和测试工具版本。
@@ -63,6 +64,7 @@ python3 tools/check_fields.py
 python3 -m unittest discover -s tests -v
 python3 -m py_compile backend/server.py backend/server_core.py backend/data_sources.py backend/diagnostics.py backend/scheduler.py deployment/manage.py
 python3 tools/verify_metrics.py
+python3 tools/benchmark_scheduler.py
 ```
 
 Windows 可使用 `py -3 -m unittest discover -s tests -v`。部署进程身份检查用例为 `tests/test_deployment.py`；Windows 实机双击及 Linux systemd 安装仍需在目标环境验收。

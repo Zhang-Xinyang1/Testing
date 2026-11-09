@@ -22,7 +22,7 @@ PIDFILE = STATE / 'process.json'
 LOG = STATE / 'server.log'
 SERVER = BACKEND / 'server.py'
 REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py',
-                    'scheduler.py')
+                    'scheduler.py', 'optimizer.py', 'platforms.py', 'input_rules.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',

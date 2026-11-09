@@ -11,6 +11,8 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key, lru_cache
+from platforms import normalize_platforms, split_platforms
+from input_rules import base_ppn, flow_product, ordered_plans, parse_datetime, resolve_wip, row_key
 
 MIN = 60000
 HOUR = 3600000
@@ -26,30 +28,8 @@ def parse_date(value):
     """Parse an ISO/date value to epoch milliseconds, matching the JS helper."""
     if value is None or value == '':
         return None
-    text = str(value).strip()
-    if not text:
-        return None
-    text = text.replace('年', '-').replace('月', '-').replace('日', '')
-    text = text.replace('/', '-')
-    if ' ' in text and 'T' not in text:
-        text = text.replace(' ', 'T', 1)
-    if 'T' not in text:
-        text += 'T00:00:00+08:00'
-    text = text.replace('Z', '+00:00')
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})'
-                         r'(?:T(\d{1,2}):(\d{2})(?::(\d{2}))?)?', text)
-        if not match:
-            raise
-        parsed = datetime(
-            int(match.group(1)), int(match.group(2)), int(match.group(3)),
-            int(match.group(4) or 0), int(match.group(5) or 0),
-            int(match.group(6) or 0), tzinfo=CST)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=CST)
-    return int(parsed.timestamp() * 1000)
+    stamp = parse_datetime(value).timestamp() * 1000
+    return int(stamp) if stamp.is_integer() else stamp
 
 
 def pad(value):
@@ -78,13 +58,7 @@ def clamp(value, low, high):
 
 
 def groups(value):
-    return [part.strip() for part in re.split(r'[;,，；/|]+', str(value or ''))
-            if part.strip()]
-
-
-def base_ppn(value):
-    """Product/flow key before the first hyphen; vendor suffix is ignored."""
-    return str(value or '').strip().split('-', 1)[0].strip()
+    return split_platforms(value)
 
 
 def merge_mps(rows):
@@ -117,17 +91,21 @@ def merge_mps(rows):
     return result
 
 
-def gap(blocks, start, duration):
+def gap(blocks, start, duration, presorted=False):
     current = start
-    for begin, end in sorted(blocks, key=lambda span: span[0]):
+    for begin, end in blocks if presorted else sorted(blocks, key=lambda span: span[0]):
+        if current + duration <= begin:
+            break
         if current < end and current + duration > begin:
             current = end
     return current
 
 
 def earliest_slot(resource, start, duration):
-    blocks = list(resource.get('pm') or []) + list(resource.get('reserved') or [])
-    return gap(blocks, max(start, resource['free']), duration)
+    blocks = resource.get('_blocks')
+    if blocks is None:
+        blocks = sorted(list(resource.get('pm') or []) + list(resource.get('reserved') or []))
+    return gap(blocks, max(start, resource['free']), duration, presorted=True)
 
 
 class Heap:
@@ -146,21 +124,6 @@ class Heap:
 
     def __len__(self):
         return len(self.a)
-
-
-def flow_product(lot_id, product, flows):
-    """Resolve a lot row to a flow key without trusting the vendor suffix."""
-    if product in flows:
-        return product
-    text = str(lot_id).strip()
-    if text in flows:
-        return text
-    parts = text.split('-')
-    for size in range(len(parts) - 1, 0, -1):
-        prefix = '-'.join(parts[:size]).strip()
-        if prefix in flows:
-            return prefix
-    return product or (parts[0].strip() if parts else '')
 
 
 def _fair(a, b):
@@ -256,7 +219,35 @@ def _parse_route(data, product):
     return ops
 
 
-def simulate(data, options):
+def _remaining_times(ops, wafer):
+    """Optimistic route suffix durations; BAKE releases the lot before cooldown."""
+    suffix = [0] * (len(ops) + 1)
+    for index in range(len(ops) - 1, -1, -1):
+        step, _, duration = ops[index]
+        if str(step).startswith('CP'):
+            duration *= MIN * wafer
+        elif step == 'BAKE':
+            duration = (duration + 2) * HOUR
+        else:
+            duration *= MIN
+        suffix[index] = suffix[index + 1] + duration
+    return suffix
+
+
+def _dispatch_key(lot, now, policy, month_ms):
+    remaining = lot['remainingMs'][lot['index']]
+    score = (lot['fairRank']
+             - policy['workWeight'] * lot.get('prodWorkShare', 0)
+             - policy['tailWeight'] * remaining / max(1, month_ms)
+             + policy.get('productBias', {}).get(lot['prod'], 0)
+             + policy.get('lotBias', {}).get(lot['key'], 0))
+    # Defer work that cannot possibly finish this month, but still schedule it
+    # later so the returned horizon contains every feasible lot.
+    return (now + remaining > lot['monthEnd'], score,
+            lot['fairRank'], lot['prod'], lot['id'], lot['key'])
+
+
+def simulate(data, options, policy=None):
     start = parse_date(data['meta']['start'])
     month_end = start + data['meta']['days'] * DAY
     ctx = {
@@ -283,6 +274,8 @@ def simulate(data, options):
         stop = min(month_end, cursor + (((7 - dow) % 7) + 1) * DAY)
         ctx['weekMeta']['W%d' % week] = {'week': 'W%d' % week, 'start': cursor, 'end': stop}
         cursor = stop
+    if data.get('weekly'):
+        ctx['weekMeta'] = {}
     for w in data.get('weekly') or []:
         ctx['weekMeta'][w['week']] = {
             'week': w['week'], 'start': parse_date(w['start']),
@@ -295,6 +288,7 @@ def simulate(data, options):
         resource = {
             'kind': 'cp', 'id': e['id'], 'eqp': e['id'], 'type': e['type'],
             'index': index, 'initialCard': e.get('card'), 'card': e.get('card'),
+            'cardUpdatedAt': start,
             'initialRecipe': e.get('recipe'), 'free': start, 'pm': [], 'reserved': [],
             'tasks': [], 'borrows': [], 'intervals': [], 'wip': [], 'prodMs': 0,
             'setupMs': 0, 'setupCount': 0, 'borrowMs': 0, 'pmMs': 0,
@@ -344,7 +338,7 @@ def simulate(data, options):
                 ctx['cardMap'][card_id] = card
             ctx['cardMap'][card_id]['recipes'][recipe['recipe']] = True
 
-    for index, plan in enumerate(data.get('pm') or []):
+    for index, plan in ordered_plans(data.get('pm') or [], 'pm'):
         machine = ctx['machineMap'].get(plan['eqp'])
         resources = [machine] if machine else [
             chamber for chamber in ctx['chambers'] if chamber['eqp'] == plan['eqp']]
@@ -371,11 +365,7 @@ def simulate(data, options):
             resource['pm'].append([slot, record['end']])
             resource['pmMs'] += duration
 
-    borrows = sorted(
-        data.get('borrow') or [],
-        key=lambda b: parse_date(b.get('date') or b.get('start')) or 0,
-    )
-    for index, plan in enumerate(borrows):
+    for index, plan in ordered_plans(data.get('borrow') or [], 'borrow'):
         machine = ctx['machineMap'].get(plan['eqp'])
         duration = plan['hours'] * HOUR
         day = parse_date(plan.get('date') or day_key(parse_date(plan['start'])))
@@ -401,7 +391,9 @@ def simulate(data, options):
                                         'end': slot + duration}
         ctx['borrows'].append(record)
 
-    excluded = {w['lotId'] for w in ctx['wip']}
+    for resource in ctx['machines'] + ctx['chambers']:
+        resource['_blocks'] = sorted(resource['pm'] + resource['reserved'])
+    excluded = {w['lotKey'] for w in ctx['wip']}
     order = {}
     events = Heap()
     cp_queues, bake_queues, done = {}, {}, {}
@@ -413,7 +405,7 @@ def simulate(data, options):
 
     flows = data.get('flows') or {}
     for row_number, row in enumerate(data.get('lots') or []):
-        if row[0] in excluded:
+        if row_key(row_number) in excluded:
             continue
         product = row[1]
         # Prefer the explicit Lot.PPN; fall back to the full lot id or the
@@ -426,7 +418,7 @@ def simulate(data, options):
         cp_per_wafer = sum(
             op[2] for op in ops if str(op[0]).startswith('CP'))
         lot = {
-            'key': 'LOT-%06d' % (row_number + 1),
+            'key': row_key(row_number),
             'id': row[0], 'prod': product, 'platform': row[2], 'type': row[2],
             'wafer': row[3], 'release': row[4], 'week': row[5],
             'weeklyDue': row[6], 'monthlyDue': row[7], 'priority': row[8],
@@ -466,7 +458,17 @@ def simulate(data, options):
                 if ok:
                     usable.append(group)
         lot['usableTypes'] = usable
-        if not ops or (cp_ops and not usable):
+        if policy is not None:
+            lot['remainingMs'] = _remaining_times(ops, lot['wafer'])
+            # Each operation can use a different allowed group. Requiring one
+            # group capable of the *whole* route rejects valid cross-group lots.
+            feasible = all(ctx['recipeCards'].get(op[1]) and any(
+                m['available'] and m['type'] in allowed
+                and (m['id'] + '|' + str(op[1])) not in forbidden
+                for m in ctx['machines']) for op in cp_ops)
+        else:
+            feasible = not cp_ops or bool(usable)
+        if not ops or not feasible:
             lot['unscheduledReason'] = '路线缺失或没有 RUN/兼容/非禁加工机台'
             continue
         events.push(lot['ready'], lot)
@@ -509,20 +511,45 @@ def simulate(data, options):
             enter(lot, when)
         next_time = events.a[0][0] if len(events) else float('inf')
 
+        dispatch = {}
+        if policy is not None:
+            for queue in list(cp_queues.values()) + list(bake_queues.values()):
+                for lot in queue:
+                    dispatch[lot['key']] = _dispatch_key(
+                        lot, now, policy, month_end - start)
+                queue.sort(key=lambda lot: dispatch[lot['key']])
+            candidates = sorted(
+                (lot for queue in cp_queues.values() for lot in queue),
+                key=lambda lot: dispatch[lot['key']])
+        else:
+            candidates = None
+
         for machine in ctx['machines']:
             if not machine['available']:
                 continue
             if machine['free'] > now:
                 next_time = min(next_time, machine['free'])
                 continue
-            best, best_card, best_setup = None, None, 0
-            for key in list(cp_queues.keys()):
-                queue = cp_queues[key]
-                if not queue:
+            # A fixed WIP operation can finish between dispatched tasks and
+            # leave a different card installed on this machine.
+            released = [w for w in machine['wip']
+                        if machine['cardUpdatedAt'] < parse_date(w['end']) <= now]
+            if released:
+                last_wip = max(released, key=lambda w: parse_date(w['end']))
+                machine['card'] = last_wip.get('card') or machine['initialCard']
+                machine['cardUpdatedAt'] = parse_date(last_wip['end'])
+            if policy is not None:
+                available_at = earliest_slot(machine, now, 1)
+                if available_at > now:
+                    next_time = min(next_time, available_at)
                     continue
-                lot = queue[0]
+            slot_cache = {}
+            best, best_card, best_setup = None, None, 0
+            pending = candidates if candidates is not None else [
+                queue[0] for queue in cp_queues.values() if queue]
+            for lot in pending:
                 op = lot['ops'][lot['index']]
-                if lot.get('preferredType') and machine['type'] != lot['preferredType']:
+                if policy is None and lot.get('preferredType') and machine['type'] != lot['preferredType']:
                     continue
                 if machine['type'] not in lot['allowedTypes'] or (
                         machine['id'] + '|' + str(op[1])) in forbidden:
@@ -534,17 +561,28 @@ def simulate(data, options):
                 setup = 0 if card == machine['card'] else 5 * MIN
                 # CP.TIME is minutes per wafer; machine time scales with lot wafers.
                 process_ms = op[2] * MIN * lot['wafer']
-                slot = earliest_slot(machine, now, process_ms + setup)
+                duration = process_ms + setup
+                if duration not in slot_cache:
+                    slot_cache[duration] = earliest_slot(machine, now, duration)
+                slot = slot_cache[duration]
                 if slot > now:
                     next_time = min(next_time, slot)
                     continue
+                if policy is not None:
+                    best, best_card, best_setup = lot, card, setup
+                    break
                 if best is None or _fair(lot, best) < 0 or (
                         _fair(lot, best) == 0 and setup < best_setup):
                     best, best_card, best_setup = lot, card, setup
             if best is None:
                 continue
             lot, op = best, best['ops'][best['index']]
-            cp_queues[lot['prod'] + '|' + str(lot['index'])].pop(0)
+            queue = cp_queues[lot['prod'] + '|' + str(lot['index'])]
+            if candidates is not None:
+                queue.remove(lot)
+                candidates.remove(lot)
+            else:
+                queue.pop(0)
             process_ms = op[2] * MIN * lot['wafer']
             end = now + best_setup + process_ms
             task = {
@@ -565,6 +603,7 @@ def simulate(data, options):
             if best_setup:
                 machine['setupCount'] += 1
             machine['card'] = best_card
+            machine['cardUpdatedAt'] = end
             lot['cpTasks'].append(task)
             lot['routeTasks'].append(task)
             lot['cpEnd'] = end
@@ -592,7 +631,10 @@ def simulate(data, options):
                 if len(queue) < 4 and now < oldest + waiting_ms:
                     next_time = min(next_time, oldest + waiting_ms)
                     continue
-                if best is None or _fair(queue[0], best) < 0:
+                better = best is None or (
+                    dispatch[queue[0]['key']] < dispatch[best['key']]
+                    if policy is not None else _fair(queue[0], best) < 0)
+                if better:
                     best, best_recipe = queue[0], recipe
             if best is None:
                 continue
@@ -688,9 +730,9 @@ def finalize(ctx):
     target_wafers = sum(m['mps'] for m in ctx['data'].get('mps') or [])
     completed_wafers = wafers(
         [lot for lot in ctx['lots'] if lot['complete'] <= ctx['monthEnd']])
-    wip_ids = {w['lotId'] for w in ctx['wip']}
-    wip_wafers = sum(row[3] for row in ctx['data'].get('lots') or []
-                     if row[0] in wip_ids)
+    wip_keys = {w['lotKey'] for w in ctx['wip']}
+    wip_wafers = sum(row[3] for index, row in enumerate(ctx['data'].get('lots') or [])
+                     if row_key(index) in wip_keys)
 
     for machine in ctx['machines']:
         machine['daily'] = [0] * ctx['data']['meta']['days']
@@ -747,9 +789,11 @@ def finalize(ctx):
                 week_end = parse_date(weekly['end']) + DAY
                 planned_week = wafers([
                     lot for lot in product_lots
-                    if week_start <= lot['complete'] < week_end])
+                    if week_start <= lot['complete'] < week_end
+                    or (lot['complete'] == week_end == ctx['monthEnd'])])
                 planned_cum = wafers(
-                    [lot for lot in product_lots if lot['complete'] < week_end])
+                    [lot for lot in product_lots if lot['complete'] < week_end
+                     or (lot['complete'] == week_end == ctx['monthEnd'])])
                 gap_value = planned_cum - cum_target
                 weekly_rows.append({
                     'platform': weekly['platform'], 'ppn': product,
@@ -792,7 +836,8 @@ def finalize(ctx):
     for platform in sorted(ctx['platformMps'].keys()):
         platform_type = (ctx['data'].get('platformType') or {}).get(platform)
         platform_machines = [m for m in ctx['machines'] if m['type'] in groups(platform)]
-        product_lots = [lot for lot in ctx['lots'] if lot['platform'] == platform]
+        product_lots = [lot for lot in ctx['lots']
+                        if ctx['prodPlatform'].get(lot['prod']) == platform]
         done = wafers([lot for lot in product_lots
                        if lot['complete'] <= ctx['monthEnd']])
         on_time = wafers([lot for lot in product_lots if lot['status'] == 'on-time'])
@@ -995,6 +1040,10 @@ def make_json_safe(value):
 
 
 def run(data, options=None):
+    from optimizer import search_schedules
+
+    data = normalize_platforms(data)
+    data['wip'] = resolve_wip(data)
     options = dict(options or {})
     options['strategy'] = 'attainment'
     options['setupMinutes'] = 5
@@ -1006,34 +1055,14 @@ def run(data, options=None):
     else:
         windows = [raw_window]
     started = time.monotonic()
-    best, trials = None, []
-    for window in windows:
-        trial_options = dict(options)
-        trial_options['bakeWindowHours'] = window
-        result = simulate(data, trial_options)
-        score = sorted(product['rate'] for product in result['productStats'])
-        wins = best is None
-        if best is not None:
-            previous = sorted(product['rate'] for product in best['productStats'])
-            for index in range(len(score)):
-                if abs(score[index] - previous[index]) > 1e-10:
-                    wins = score[index] > previous[index]
-                    break
-            if all(abs(score[index] - previous[index]) < 1e-10
-                   for index in range(len(score))):
-                wins = (result['metrics']['completedWafers']
-                        > best['metrics']['completedWafers'])
-        trials.append({
-            'bakeWindowHours': window,
-            'minProductRate': result['metrics']['minProductRate'],
-            'completedMonth': result['metrics']['completedMonth'],
-            'completedWafers': result['metrics']['completedWafers'],
-        })
-        if wins:
-            best = result
-    if best is None:
-        best = simulate(data, dict(options, bakeWindowHours=0))
-    best['trials'] = trials
+    if not windows:
+        windows = [0]
+    if len(windows) > 8 or any(
+            isinstance(w, bool) or not isinstance(w, (int, float))
+            or not math.isfinite(w) or not 0 <= w <= 24 for w in windows):
+        raise ValueError('BAKE 等待窗口须为 0 至 24 小时，最多 8 个候选值')
+    windows = list(dict.fromkeys(windows))
+    best = search_schedules(data, options, windows, simulate)
     best['runMs'] = int((time.monotonic() - started) * 1000)
     best['runAt'] = datetime.now(timezone.utc).isoformat(
         timespec='milliseconds').replace('+00:00', 'Z')
@@ -1055,7 +1084,7 @@ def compact_result(result):
     lots = []
     for source in compact.get('lots') or []:
         lot = dict(source)
-        for key in ('allowedTypes', 'bakeOp', 'qtOp'):
+        for key in ('allowedTypes', 'bakeOp', 'qtOp', 'remainingMs'):
             lot.pop(key, None)
         lots.append(lot)
     compact['lots'] = lots
@@ -1072,6 +1101,7 @@ def compact_result(result):
     chambers = []
     for source in compact.get('chambers') or []:
         chamber = dict(source)
+        chamber.pop('_blocks', None)
         chamber.pop('daily', None)
         chamber.pop('reserved', None)
         chamber['batches'] = [batch_map[batch['id']]
@@ -1082,6 +1112,8 @@ def compact_result(result):
     machines = []
     for source in compact.get('machines') or []:
         machine = dict(source)
+        machine.pop('_blocks', None)
+        machine.pop('cardUpdatedAt', None)
         machine.pop('daily', None)
         machine.pop('intervals', None)
         machines.append(machine)

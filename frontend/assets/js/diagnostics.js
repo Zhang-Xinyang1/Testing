@@ -8,19 +8,21 @@
   function pick(object, keys) {
     var out = {}; keys.forEach(function (key) { out[key] = object[key]; }); return out;
   }
-  A.recordDiagnostics = async function (result, error) {
+  A.recordDiagnostics = async function (result, error, snapshot) {
     if (A.state.mode !== 'server') { failure = '静态模式不保存诊断，请使用 Python 服务地址。'; return; }
-    var input = JSON.parse(JSON.stringify(A.state.data));
+    var input = JSON.parse(JSON.stringify(snapshot ? snapshot.input : A.state.data));
+    var options = snapshot ? snapshot.options : A.state.options;
     // Operational timestamps do not alter the scheduling input identity.
     delete input.meta.loadedAt; delete input.meta.configPath;
     var output = result ? {
       cpTasks: result.cpTasks.map(function (t) { return pick(t, ['lotId','lotKey','prod','step','recipe','machine','card','start','end','blockStart','opIndex']); }),
       batches: result.batches.map(function (b) { return {id:b.id, chamber:b.chamber, lots:b.lots.map(function (l) {return {id:l.id, key:l.key};}), wafers:b.wafers, start:b.start,end:b.end,processStart:b.processStart,processEnd:b.processEnd,recipe:b.recipe}; }),
       lots: result.lots.map(function (l) {return pick(l,['id','key','prod','wafer','complete','routeTasks','unscheduledReason']);}),
-      borrows: result.borrows, pmRecords: result.pmRecords, runMs: result.runMs
+      borrows: result.borrows, pmRecords: result.pmRecords, runMs: result.runMs,
+      optimization: result.optimization, trials: result.trials
     } : null;
     try {
-      var response = await fetch(endpoint(), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:input, options:A.state.options,result:output,error:error ? error.message : null,trigger:trigger})});
+      var response = await fetch(endpoint(), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:input, options:options,result:output,error:error ? error.message : null,trigger:trigger})});
       var body = await response.json(); if (!response.ok) throw new Error(body.error || '记录失败');
       reports.unshift(body.report); reports = reports.slice(0,20); failure = '';
     } catch (err) { failure = '诊断未保存：' + err.message; }

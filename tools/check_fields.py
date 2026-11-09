@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(ROOT, 'backend'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
 from server_core import (DEFAULT_CONFIG, load_config, mapped_column,
-                         read_source)  # noqa: E402
+                         norm_key, read_source)  # noqa: E402
 from build_data import clean_rows, read_workbook  # noqa: E402
 
 
@@ -65,6 +65,7 @@ FIELDS = {
     ]),
     'wip': ('在制 Lot（可选）', [
         ('lotId', True, 'LotID，必须存在于 Lot 列表'),
+        ('lotKey', False, '行键；同名 Lot 必填，如 LOT-000001'),
         ('eqp', False, '占用机台；等待中可空'),
         ('chamber', False, 'BAKE 腔体，如 OVEN-01-C1'),
         ('card', False, 'CP 针卡类型；BAKE 留空'),
@@ -95,7 +96,11 @@ def main():
     cfg = load_config(config_path)
     source = cfg.get('dataSource', {})
     path = read_source(source.get('path', ''))
-    workbook = read_workbook(path)
+    try:
+        workbook = read_workbook(path)
+    finally:
+        if source.get('path', '').startswith(('http://', 'https://')):
+            os.unlink(path)
     sheets = {name: rows for name, rows in workbook}
     header_row = int(source.get('headerRow', 1))
     sheet_map = source.get('sheetMap', {})
@@ -111,15 +116,18 @@ def main():
         if not sheet:
             print('  当前配置不读取此表；需要时在 Sheet 设置中增加 "%s"。' % key)
             continue
-        if sheet not in sheets:
+        actual = sheet if sheet in sheets else next((name for name in sheets if norm_key(name) == norm_key(sheet)), None)
+        if actual is None:
             print('  !! 找不到 Sheet：%s' % sheet)
             failures += 1
             continue
-        rows = sheets[sheet][max(0, header_row - 1):]
+        rows = sheets[actual][max(0, header_row - 1):]
         header, data = clean_rows(rows)
         print('  实际表头：' + ' | '.join(str(x) for x in header))
         print('  数据行：%d' % len(data))
-        mapping = field_map.get(sheet, {})
+        mapping = field_map.get(sheet)
+        if mapping is None:
+            mapping = next((value for name, value in field_map.items() if norm_key(name) == norm_key(sheet)), {})
         for logical, required, note in fields:
             column = mapping.get(logical)
             resolved = mapped_column(header, column)

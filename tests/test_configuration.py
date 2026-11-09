@@ -81,7 +81,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_seven_sheet_mode_falls_back_without_helper_sheets(self):
         c = load_config()
         for key in ('params', 'lots', 'weekly'):
-            c['dataSource']['sheetMap'][key] = 'Missing-' + key
+            c['dataSource']['sheetMap'].pop(key, None)
         data = build_payload(config=c)
         self.assertEqual(data['weekly'], [])
         self.assertEqual(data['rules'], [])
@@ -102,7 +102,7 @@ class ConfigurationTests(unittest.TestCase):
         before = hashlib.sha256(workbook.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / 'config.json'
-            config.write_text(json.dumps(load_config(), ensure_ascii=False))
+            config.write_text(json.dumps(load_config(), ensure_ascii=False), encoding='utf-8')
             server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
             server.config_path = str(config)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -113,8 +113,12 @@ class ConfigurationTests(unittest.TestCase):
                 if origin:
                     headers['Origin'] = origin
                 request = urllib.request.Request(base + path, json.dumps(data).encode(), headers)
-                with urllib.request.urlopen(request) as response:
-                    return json.load(response)
+                try:
+                    with urllib.request.urlopen(request) as response:
+                        return json.load(response)
+                except urllib.error.HTTPError as error:
+                    error.msg = error.read().decode('utf-8')
+                    raise
             try:
                 update = {'scheduling': {'wip': [{'lotId': self.data['lots'][0][0], 'eqp': ''}],
                                           'bakeResources': {'machines': 9, 'chambers': 2}}}
@@ -136,6 +140,30 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(scheduled['result']['metrics']['completedWafers'], 11000)
                 self.assertEqual(scheduled['result']['metrics']['completedWafers'],
                                  sum(p['completed'] for p in scheduled['result']['productStats']))
+                # Exercise actual XLSX upload -> mapped preview -> scheduling,
+                # including repeated LotIDs with distinct row identities.
+                from build_case import write_workbook
+                from build_data import read_workbook
+                duplicate_book = Path(directory) / 'duplicate-lots.xlsx'
+                sheets = read_workbook(str(workbook))
+                sheets.append(('Lot明细', [['LotID', 'Wafer Qty']] + [
+                    [lot[1] + '-vendor', lot[3]] for lot in self.data['lots']]))
+                write_workbook(duplicate_book, sheets)
+                request = urllib.request.Request(base + '/api/uploads', duplicate_book.read_bytes(),
+                    {'Content-Type': 'application/octet-stream', 'X-Filename': 'duplicate-lots.xlsx'})
+                with urllib.request.urlopen(request) as response:
+                    duplicate_upload = json.load(response)
+                mapping = load_config()
+                mapping['dataSource']['path'] = duplicate_upload['path']
+                mapping['dataSource']['sheetMap']['lots'] = 'Lot明细'
+                mapping['fieldMap']['Lot明细'] = {'lotId': 'LotID', 'wafer': 'Wafer Qty'}
+                imported = post('/api/preview', {key: mapping[key] for key in ('dataSource', 'fieldMap')})['data']
+                duplicate_result = post('/api/schedule', {'data': imported,
+                    'options': {'bakeWindowHours': 0, 'searchIterations': 0}})['result']
+                self.assertEqual(len({lot['id'] for lot in duplicate_result['lots']}), 72)
+                self.assertEqual(len({lot['key'] for lot in duplicate_result['lots']}), 476)
+                self.assertEqual(duplicate_result['metrics']['completedWafers'], 11000)
+                self.assertEqual(config.read_bytes(), original)
                 reserved = post('/api/oracle/config', {'host': 'db.internal', 'port': 1521,
                     'service': 'MES', 'user': 'readonly', 'passwordEnv': 'ORACLE_PASSWORD', 'views': {'mps': 'MES.V_MPS'}})
                 self.assertEqual(reserved['status'], 'reserved')

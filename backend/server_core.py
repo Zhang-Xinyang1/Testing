@@ -3,6 +3,8 @@
 import json, os, re, math, tempfile, urllib.request
 from datetime import datetime, timedelta, timezone
 from data_sources import oracle_settings, read_oracle
+from platforms import clean_type, normalize_platforms, split_platforms
+from input_rules import base_ppn, flow_product, ordered_plans, parse_datetime, resolve_wip
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
@@ -27,13 +29,11 @@ def resolve_column(header, wanted):
     """Return the actual header name matching ``wanted``, or None."""
     if not wanted:
         return None
-    if wanted in header:
-        return wanted
     target = norm_key(wanted)
-    for name in header:
-        if norm_key(name) == target:
-            return name
-    return None
+    matches = [name for name in header if norm_key(name) == target]
+    if len(matches) > 1:
+        raise ValueError('字段匹配不唯一：%s → %s；请统一表头。' % (wanted, '、'.join(matches)))
+    return matches[0] if matches else None
 
 
 def mapped_column(header, value):
@@ -44,34 +44,6 @@ def mapped_column(header, value):
         if resolved:
             return resolved
     return None
-
-
-def parse_datetime(value):
-    """Parse Excel/ISO date text, accepting common non-ISO separators."""
-    text = str(value).strip()
-    if not text:
-        raise ValueError('日期为空')
-    text = text.replace('年', '-').replace('月', '-').replace('日', '')
-    text = text.replace('/', '-')
-    if ' ' in text and 'T' not in text:
-        text = text.replace(' ', 'T', 1)
-    if 'T' not in text:
-        text += 'T00:00:00+08:00'
-    text = text.replace('Z', '+00:00')
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})'
-                         r'(?:T(\d{1,2}):(\d{2})(?::(\d{2}))?)?', text)
-        if not match:
-            raise
-        parsed = datetime(
-            int(match.group(1)), int(match.group(2)), int(match.group(3)),
-            int(match.group(4) or 0), int(match.group(5) or 0),
-            int(match.group(6) or 0), tzinfo=timezone(timedelta(hours=8)))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
-    return parsed
 
 
 def route_patterns():
@@ -112,31 +84,6 @@ def rows_for(sheets, sheet_name, header_row=1):
     raise KeyError('Sheet not found: ' + sheet_name)
 
 
-def flow_product(lot_id, explicit, flows):
-    """Resolve the flow key from an explicit PPN or the lot-id prefix.
-
-    ``PPN1-1`` and ``PPN1-2`` belong to the same flow ``PPN1``; the suffix is
-    only a vendor marker.  Prefer an explicit, valid PPN, then the full lot id,
-    then the longest prefix that exists in the flow table.
-    """
-    if explicit in flows:
-        return explicit
-    text = str(lot_id).strip()
-    if text in flows:
-        return text
-    parts = text.split('-')
-    for size in range(len(parts) - 1, 0, -1):
-        prefix = '-'.join(parts[:size]).strip()
-        if prefix in flows:
-            return prefix
-    return explicit or (parts[0].strip() if parts else '')
-
-
-def base_ppn(value):
-    """Product/flow key before the first hyphen; vendor suffix is ignored."""
-    return str(value or '').strip().split('-', 1)[0].strip()
-
-
 def merge_mps(rows):
     """Merge MPS rows by PPN prefix; multiple orders/vendors are summed.
 
@@ -156,8 +103,7 @@ def merge_mps(rows):
         if isinstance(quantity, str):
             quantity = num(quantity, 0)
         entry['mps'] += quantity or 0
-        for group in re.split(r'[;,，；/|]+', str(row.get('platform') or '')):
-            group = group.strip()
+        for group in split_platforms(row.get('platform')):
             if group and group not in entry['_platforms']:
                 entry['_platforms'].append(group)
     result = []
@@ -168,6 +114,14 @@ def merge_mps(rows):
     return result
 
 
+def display_path(path):
+    """Use a relative label when possible, including Windows cross-drive configs."""
+    try:
+        return os.path.relpath(path, ROOT)
+    except ValueError:
+        return os.path.abspath(path)
+
+
 def public_config(config_path=DEFAULT_CONFIG):
     cfg = load_config(config_path)
     src = cfg.get('dataSource', {})
@@ -176,7 +130,7 @@ def public_config(config_path=DEFAULT_CONFIG):
     if path and not path.startswith('http'):
         exists = os.path.exists(path if os.path.isabs(path) else os.path.join(ROOT, path))
     return {
-        'configPath': os.path.relpath(config_path, ROOT),
+        'configPath': display_path(config_path),
         'dataSource': src,
         'fieldMap': cfg.get('fieldMap', {}),
         'scheduling': cfg.get('scheduling', {}),
@@ -224,10 +178,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         try:
             header, rows = rows_for(wb, name, src.get('headerRow', 1))
         except KeyError:
-            # Seven-sheet deployments omit the optional helper sheets.
-            if key in ('params', 'lots', 'weekly', 'wip'):
-                return [], []
-            raise
+            raise ValueError('已配置的 Sheet 不存在：%s → %s；请修正映射，'
+                             '不使用此表时删除对应 Sheet 设置。' % (key, name))
         sheet_headers[name] = header
         mapping = mapping_for(name)
         required = {
@@ -403,6 +355,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     # ---- Lots ----
     _, lot_rows = rows_of('lots')
+    if smap.get('lots') and not lot_rows and any(m['mps'] for m in mps):
+        raise ValueError('已配置 Lot 明细表，但没有有效记录；请补齐明细或移除 lots 映射后使用默认拆批。')
     month = src.get('month') or '2026-09'
     y, mo = [int(x) for x in month.split('-')[:2]]
     month_start = '%04d-%02d-01' % (y, mo)
@@ -411,10 +365,10 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     start_dt = datetime.strptime(month_start, '%Y-%m-%d')
     lots = []
     if lot_rows:
-        for r in lot_rows:
+        for index, r in enumerate(lot_rows, 1):
             lid = str(get(r, 'lots', 'lotId', '')).strip()
             if not lid:
-                continue
+                raise ValueError('Lot 明细第 %d 条的 LotID 不能为空' % index)
             prod = str(get(r, 'lots', 'ppn', '')).strip()
             # Actual lot files often encode the flow/product before the first
             # hyphen (PPN1-1, PPN1-2, ...). The suffix is a vendor marker and
@@ -449,7 +403,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         'start': month_start + 'T00:00:00+08:00',
         'days': (datetime.strptime(next_month, '%Y-%m-%d') - start_dt).days,
         'source': src.get('displayName') or source_path,
-        'configPath': os.path.relpath(config_path, ROOT),
+        'configPath': display_path(config_path),
         'loadedAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'serverMode': True,
         'mpsUnit': 'wafer',
@@ -464,22 +418,27 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         'rules': rules, 'sheetSummary': summary, 'fieldMap': fm, 'sheetMap': smap,
     }
     overrides = cfg.get('scheduling', {})
+    meta['eqpSource'] = 'override' if 'eqp' in overrides else 'excel'
+    meta['excelCpTypes'] = sorted({clean_type(e['type']) for e in eqp
+                                  if 'OVEN' not in clean_type(e['type']).upper()})
     for key in ('eqp', 'pm', 'borrow', 'platformType', 'cardType'):
         if key in overrides:
             payload[key] = overrides[key]
     _, wip_rows = rows_of('wip')
-    wip = [{key: get(r, 'wip', key, '') for key in ('lotId', 'eqp', 'chamber', 'card', 'start', 'end')} for r in wip_rows]
+    wip = [{key: get(r, 'wip', key, '') for key in ('lotId', 'lotKey', 'eqp', 'chamber', 'card', 'start', 'end')} for r in wip_rows]
     payload['wip'] = overrides.get('wip', wip)
+    payload = normalize_platforms(payload)
     ovens = [e for e in payload['eqp'] if 'OVEN' in e['type'].upper()]
     payload['bakeResources'] = {'machines': len(ovens), 'chambers': 4, 'ids': [e['id'] for e in ovens]} if ovens else overrides.get('bakeResources', {'machines': 7, 'chambers': 4})
     payload['schemaVersion'] = 'confirmed-2026-11-06'
-    validate_schedule(payload)
+    payload = validate_schedule(payload)
     payload['planIssues'] = calendar_issues(payload)
     return payload
 
 
 def validate_schedule(data):
     """Validate business references and occupied resource calendars, without Excel writes."""
+    data = normalize_platforms(data)
     def require(condition, message):
         if not condition:
             raise ValueError(message)
@@ -490,11 +449,19 @@ def validate_schedule(data):
     def date(value):
         return parse_datetime(value)
 
-    for key in ('eqp', 'pm', 'borrow', 'wip'):
+    require(type(data['meta'].get('days')) is int and 1 <= data['meta']['days'] <= 366,
+            '排产天数必须为 1 至 366 的整数')
+    date(data['meta'].get('start'))
+    for key in ('eqp', 'pm', 'borrow', 'wip', 'mps', 'lots', 'recipes'):
         require(isinstance(data[key], list), key + ' 必须为记录列表')
+    recipe_ids = [r.get('recipe') for r in data['recipes']]
+    require(all(isinstance(r, str) and r.strip() for r in recipe_ids)
+            and len(set(recipe_ids)) == len(recipe_ids), 'Recipe 名称不能为空或重复')
     for recipe in data['recipes']:
-        require(1 <= len(recipe['cards']) <= 4,
+        require(isinstance(recipe['cards'], list) and 1 <= len(recipe['cards']) <= 4,
                 'Recipe 候选针卡类型必须为 1 至 4 种：' + recipe['recipe'])
+        require(all(isinstance(c, str) and c.strip() for c in recipe['cards']),
+                'Recipe 候选针卡类型不能为空：' + recipe['recipe'])
         require(len(set(recipe['cards'])) == len(recipe['cards']),
                 'Recipe 候选针卡不能重复：' + recipe['recipe'])
     ids = [e['id'] for e in data['eqp']]
@@ -503,48 +470,115 @@ def validate_schedule(data):
     machines = {e['id']: e for e in data['eqp']}
     for e in data['eqp']:
         require(bool(e.get('type')), '机台 TYPE 不能为空')
+        require(len(split_platforms(e['type'])) == 1, '每台设备只能填写一个 TYPE：' + e['id'])
+    cp_types = {e['type'] for e in data['eqp'] if 'OVEN' not in e['type'].upper()}
+
+    def validate_platform(value, label):
+        selected = split_platforms(value)
+        missing = [name for name in selected if name not in cp_types]
+        if selected and not missing:
+            return
+        meta = data.get('meta') or {}
+        source = {'override': '手工机台配置（覆盖 Excel EQP）',
+                  'excel': 'Excel EQP 表'}.get(meta.get('eqpSource'), '本次排产输入')
+        message = ('Platform 未匹配 EQP.TYPE（%s）：%s；缺少机台组：%s；'
+                   '当前 EQP.TYPE：%s；机台来源：%s。TYPE 允许重复，EQPID 必须唯一。'
+                   % (label, value or '空', '、'.join(missing) or 'Platform 为空',
+                      '、'.join(sorted(cp_types)) or '无 CP 机台组', source))
+        if meta.get('eqpSource') == 'override':
+            message += (' Excel 原表 TYPE：%s。请核对页面机台配置；'
+                        '“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。'
+                        % ('、'.join(meta.get('excelCpTypes') or []) or '无'))
+        raise ValueError(message)
     bake = data['bakeResources']
     for key in ('machines', 'chambers'):
         require(type(bake.get(key)) is int and 1 <= bake[key] <= 100, 'BAKE 数量和腔体数必须为 1 至 100 的整数')
-    bake_ids = set(bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)]))
+    oven_ids = bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)])
+    require(isinstance(oven_ids, list) and len(oven_ids) == bake['machines']
+            and all(isinstance(x, str) and x.strip() for x in oven_ids)
+            and len(set(oven_ids)) == len(oven_ids), 'BAKE 编号必须非空、唯一且与台数一致')
+    bake_ids = set(oven_ids)
+    cp_ids = {e['id'] for e in data['eqp'] if e['type'] in cp_types}
+    require(not (bake_ids & cp_ids), 'BAKE 编号不能与 CP 机台重复')
     chamber_ids = {e + '-C%d' % c for e in bake_ids for c in range(1, bake['chambers'] + 1)}
     require(bool(data['mps']), 'MPS 表没有有效数据，请检查字段映射')
+    for row in data['mps']:
+        quantity = num(row.get('mps'), float('nan')) if isinstance(row.get('mps'), str) else row.get('mps')
+        require(number(quantity) and quantity >= 0 and quantity == int(quantity),
+                'MPS 每行必须为非负整数 wafer 数：' + str(row.get('ppn')))
+        row['mps'] = int(quantity)
     mps_rows = merge_mps(data['mps'])
     require(bool(mps_rows), 'MPS 表没有有效数据，请检查字段映射')
+    data['mps'] = mps_rows
     lot_ids = [r[0] for r in data['lots']]
     require(all(isinstance(value, str) and value.strip() for value in lot_ids),
             'LotID 不能为空')
     lots = set(lot_ids)
     wafer_totals = {}
     product_ids = {m['ppn'] for m in mps_rows}
+    platforms = {m['ppn']: set(split_platforms(m['platform'])) for m in mps_rows}
+    for m in mps_rows:
+        validate_platform(m['platform'], 'PPN ' + m['ppn'])
     flows = data.get('flows') or {}
     for lot in data['lots']:
+        require(isinstance(lot, list) and len(lot) >= 9, 'Lot 明细需要完整的 9 个字段')
         product = flow_product(lot[0], lot[1], flows)
         require(product in product_ids, 'Lot 引用未知 PPN：' + lot[0])
+        lot[1] = product
         require(number(lot[3]) and lot[3] == int(lot[3]) and 1 <= lot[3] <= 25,
                 'Lot 的 wafer 片数必须为 1 至 25 的整数：' + lot[0])
+        validate_platform(lot[2], 'Lot ' + lot[0])
+        require(set(split_platforms(lot[2])) <= platforms[product],
+                'Lot 的 Platform 超出该 PPN 允许的机台组：' + lot[0])
+        for index, label in ((4, 'Release Time'), (6, 'Weekly Due'), (7, 'Monthly Due')):
+            try:
+                date(lot[index])
+            except (ValueError, TypeError) as error:
+                raise ValueError('Lot %s 的 %s 无效：%s' % (lot[0], label, lot[index])) from error
         wafer_totals[product] = wafer_totals.get(product, 0) + lot[3]
     for m in mps_rows:
         require(number(m['mps']) and m['mps'] == int(m['mps']) and m['mps'] >= 0,
                 'MPS 必须为非负整数 wafer 数')
         require(wafer_totals.get(m['ppn'], 0) == m['mps'],
                 '产品 Lot 的 wafer 合计必须等于 MPS：' + m['ppn'])
-        groups = [v.strip() for v in re.split(r'[;,，；/|]+', m['platform']) if v.strip()]
-        cp_types = {e['type'] for e in data['eqp'] if 'OVEN' not in e['type'].upper()}
-        require(bool(groups) and set(groups) <= cp_types, 'Platform 必须直接匹配 EQP.TYPE：' + m['platform'])
+        validate_platform(m['platform'], 'PPN ' + m['ppn'])
         require(m['ppn'] in data['flows'], '产品缺少路线：' + m['ppn'])
         steps = [op[0] for op in data['flows'][m['ppn']]]
         require(steps in route_patterns(),
                 '产品 STEP 顺序不属于已确认的七种路线：' + m['ppn'] + ' / ' + ','.join(steps))
         for op in data['flows'][m['ppn']]:
+            require(len(op) == 3, '工序需包含 STEP、Recipe、Time：' + m['ppn'])
             if op[0].startswith('CP'):
                 require(any(r['recipe'] == op[1] for r in data['recipes']), 'CP Recipe 缺少候选针卡：' + op[1])
-    seen = set()
-    occupied, card_busy = {}, {}
+                require(number(op[2]) and op[2] > 0, 'CP Time 必须为有限正数：' + m['ppn'])
+            elif op[0] == 'BAKE':
+                require(op[1] in ('210C24H', '250C24H'), 'BAKE Recipe 无效：' + m['ppn'])
+            elif op[0] == 'QTIME1':
+                require(str(op[1]) in ('7', '14', '28'), 'QTIME1 Recipe 无效：' + m['ppn'])
+    for constraint in data.get('constraints') or []:
+        require(constraint.get('eqp') in cp_ids, '禁加工引用未知 CP 机台：' + str(constraint.get('eqp')))
+        require(constraint.get('recipe') in recipe_ids, '禁加工引用未知 Recipe：' + str(constraint.get('recipe')))
+        require(not constraint.get('type') or clean_type(constraint['type']) == machines[constraint['eqp']]['type'],
+                '禁加工 TYPE 与机台不一致：' + constraint['eqp'])
+    weekly_keys, week_spans = set(), {}
+    for weekly in data.get('weekly') or []:
+        key = (base_ppn(weekly['ppn']), weekly['week'])
+        require(key[0] in product_ids and key not in weekly_keys, '周目标 PPN 无效或 PPN/Week 重复')
+        weekly_keys.add(key)
+        weekly['ppn'] = key[0]
+        require(number(weekly['target']) and weekly['target'] >= 0 and weekly['target'] == int(weekly['target']),
+                '周目标必须为非负整数 wafer 数')
+        span = (date(weekly['start']), date(weekly['end']) + timedelta(days=1))
+        require(span[0] < span[1], '周目标日期范围无效')
+        require(weekly['week'] not in week_spans or week_spans[weekly['week']] == span,
+                '同一 Week 的日期范围必须一致：' + weekly['week'])
+        week_spans[weekly['week']] = span
+    spans = sorted(week_spans.values())
+    require(all(spans[i][0] >= spans[i - 1][1] for i in range(1, len(spans))), '不同 Week 的日期范围不能重叠')
+    data['wip'] = resolve_wip(data)
+    occupied = {}
     for w in data['wip']:
         lid, eqp = w['lotId'], w.get('eqp', '')
-        require(lid in lots and lid not in seen, '在制 Lot 无效或重复：' + lid)
-        seen.add(lid)
         # Empty resource means the lot is in a waiting stage; it is still excluded.
         if not eqp:
             require(not w.get('card') and not w.get('chamber'), '等待中的在制 Lot 不应填写针卡或腔体')
@@ -562,11 +596,10 @@ def validate_schedule(data):
             card = w.get('card') or machines[eqp].get('card')
             require(bool(card), 'CP 在制需要针卡类型')
             w['card'] = card
-            card_busy.setdefault(card, []).append((start, end))
         for a, b, other in occupied.get(resource, []):
             if start < b and end > a:
                 require(eqp in bake_ids and (start, end) == (a, b), '在制资源时间冲突：' + resource)
-        occupied.setdefault(resource, []).append((start, end, lid))
+        occupied.setdefault(resource, []).append((start, end, w['lotKey']))
     for resource, entries in occupied.items():
         if resource in chamber_ids:
             groups = {}
@@ -576,17 +609,20 @@ def validate_schedule(data):
                 require(len(group) <= 4, 'BAKE 在制组批超过 4 lot')
     for key in ('borrow', 'pm'):
         for p in data[key]:
-            require(p['eqp'] in (set(ids) if key == 'borrow' else set(ids) | bake_ids), '计划引用未知机台：' + p['eqp'])
+            require(p['eqp'] in (cp_ids if key == 'borrow' else set(ids) | bake_ids), '计划引用未知或不适用机台：' + p['eqp'])
             require(number(p['hours']) and 0 < p['hours'] <= 744, '计划时长必须大于 0 且不超过 744 小时')
             if key == 'borrow':
                 require(0.6 <= p['hours'] <= 24, '借机时数必须为 0.6 至 24 小时')
                 date(p.get('start') or p['date'])
+                if p.get('start') and p.get('date'):
+                    require(date(p['start']).date() == date(p['date']).date(), '借机 start 必须在指定 DATE 当天')
             else:
                 early, due, over = [date(p[k]).date() for k in ('early', 'due', 'over')]
                 require(early <= due <= over, 'PM 日期必须满足 Early ≤ Due ≤ Over')
                 if p.get('start'):
                     s = date(p['start'])
                     require(s.date() >= early and (s + timedelta(hours=p['hours']) - timedelta(microseconds=1)).date() <= over, 'PM 指定时间超出维护窗口')
+    return data
 
 
 def calendar_issues(data):
@@ -617,9 +653,11 @@ def calendar_issues(data):
             blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
         if missing:
             pm_blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
-    for index, p in enumerate(data['pm']):
+    bake = data['bakeResources']
+    bake_ids = set(bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)]))
+    for index, p in ordered_plans(data['pm'], 'pm'):
         resources = [p['eqp']]
-        if p['eqp'] in set(data['bakeResources'].get('ids', [])) or p['eqp'].startswith('BAKE-'):
+        if p['eqp'] in bake_ids:
             resources = [p['eqp'] + '-C%d' % i for i in range(1, data['bakeResources']['chambers'] + 1)]
         spans = [span for resource in resources for span in pm_blocked.get(resource, [])]
         early = date(p['early'])
@@ -633,7 +671,7 @@ def calendar_issues(data):
             span = (start, start + duration)
             blocked.setdefault(resource, []).append(span)
             pm_blocked.setdefault(resource, []).append(span)
-    for index, b in enumerate(data['borrow']):
+    for index, b in ordered_plans(data['borrow'], 'borrow'):
         first = date(b.get('start') or b['date'])
         duration = timedelta(hours=b['hours'])
         latest = first if b.get('start') else date(b['date']) + timedelta(days=1) - timedelta(microseconds=1)
