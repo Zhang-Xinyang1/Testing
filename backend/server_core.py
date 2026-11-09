@@ -371,7 +371,7 @@ def validate_schedule(data):
         require(m['ppn'] in data['flows'], '产品缺少路线：' + m['ppn'])
         steps = [op[0] for op in data['flows'][m['ppn']]]
         require(steps in route_patterns(),
-                '产品 STEP 顺序不属于已确认的六种路线：' + m['ppn'] + ' / ' + ','.join(steps))
+                '产品 STEP 顺序不属于已确认的七种路线：' + m['ppn'] + ' / ' + ','.join(steps))
         for op in data['flows'][m['ppn']]:
             if op[0].startswith('CP'):
                 require(any(r['recipe'] == op[1] for r in data['recipes']), 'CP Recipe 缺少候选针卡：' + op[1])

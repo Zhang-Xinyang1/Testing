@@ -5,7 +5,7 @@ import re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'backend'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
-from server_core import build_payload, load_config, validate_schedule
+from server_core import build_payload, load_config, route_patterns, validate_schedule
 import copy
 from build_data import read_workbook, clean_rows
 
@@ -83,7 +83,7 @@ class CaseRelationTests(unittest.TestCase):
                 else:
                     self.assertIn(op[1],{r['recipe'] for r in self.data['recipes']});self.assertGreater(op[2],0)
 
-    def test_exact_six_confirmed_patterns_including_repeated_bake(self):
+    def test_seven_configured_route_patterns_and_current_case_subset(self):
         expected = {
             ('CP1','BAKE','CP2','BAKE','CP3','QTIME1','CP4'),
             ('CP1','BAKE','CP2','QTIME1','CP3'),
@@ -91,16 +91,28 @@ class CaseRelationTests(unittest.TestCase):
             ('CP1','BAKE','CP2','BAKE','CP3','CP4','QTIME1'),
             ('CP1','BAKE','CP2'),
             ('CP1','BAKE','CP2','BAKE','CP3'),
+            ('CP1','BAKE','CP2','CP3'),
         }
+        self.assertEqual({tuple(p) for p in route_patterns()}, expected)
         actual={tuple(op[0] for op in ops) for ops in self.data['flows'].values()}
-        self.assertEqual(actual, expected)
+        self.assertTrue(actual <= expected)
+        self.assertIn(('CP1','BAKE','CP2','CP3'), expected)
         self.assertTrue(all(op[0]!='QTIME' for ops in self.data['flows'].values() for op in ops))
+
+    def test_seventh_route_is_accepted(self):
+        d=copy.deepcopy(self.data)
+        product=d['mps'][0]['ppn']
+        d['flows'][product]=[
+            ['CP1','CP-R01',10],['BAKE','210C24H',None],
+            ['CP2','CP-R02',10],['CP3','CP-R03',10],
+        ]
+        validate_schedule(d)
 
     def test_invalid_route_is_rejected_without_reordering(self):
         d=copy.deepcopy(self.data)
         product=d['mps'][0]['ppn']
         d['flows'][product][0],d['flows'][product][1]=d['flows'][product][1],d['flows'][product][0]
-        with self.assertRaisesRegex(ValueError,'六种路线'):
+        with self.assertRaisesRegex(ValueError,'七种路线'):
             validate_schedule(d)
 
     def test_initial_installation_matches_recipe(self):

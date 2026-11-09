@@ -2,7 +2,7 @@
   "options": {
     "strategy": "attainment",
     "setupMinutes": 5,
-    "bakeWindowHours": 4
+    "bakeWindowHours": 0
   },
   "unit": "wafer",
   "lotSizing": "default-25-tail",
@@ -10,32 +10,32 @@
   "synthetic": true,
   "metrics": {
     "totalLots": 476,
-    "completedMonth": 460,
-    "completedLots": 460,
+    "completedMonth": 476,
+    "completedLots": 476,
     "wipLots": 0,
     "mpsUnit": "wafer",
     "totalWafers": 11000,
     "scheduledWafers": 11000,
-    "completedWafers": 10696,
+    "completedWafers": 11000,
     "wipWafers": 0,
     "unscheduledLots": 0,
-    "completionRate": 0.9723636363636363,
-    "onTime": 460,
-    "onTimeRate": 0.9723636363636363,
+    "completionRate": 1.0,
+    "onTime": 476,
+    "onTimeRate": 1.0,
     "lateWeek": 0,
-    "lateMonth": 16,
+    "lateMonth": 0,
     "cpOps": 1610,
     "cpTasks": 1610,
-    "batches": 248,
-    "avgBatchLots": 2.818548387096774,
+    "batches": 531,
+    "avgBatchLots": 1.3163841807909604,
     "maxBatchWafers": 100,
-    "avgBatchWafers": 65.16935483870968,
-    "cpUtil": 0.7472796639231825,
-    "bakeUtil": 0.32916666666666666,
-    "bakeLoad": 0.34444444444444444,
+    "avgBatchWafers": 30.436911487758945,
+    "cpUtil": 0.7620704732510288,
+    "bakeUtil": 0.7375,
+    "bakeLoad": 0.7375,
     "cardUtil": 0,
-    "setups": 1553,
-    "setupMinutes": 7765,
+    "setups": 1554,
+    "setupMinutes": 7770,
     "pmCount": 11,
     "pmInWindow": 11,
     "borrowTotal": 119,
@@ -44,31 +44,31 @@
     "borrowDelayed": 0,
     "borrowCancelRate": 0.0,
     "borrowMaxDelay": 0,
-    "cpMakespan": 1791157380000.0,
-    "bakeMakespan": 1791084060000.0,
-    "makespan": 1791157380000.0,
-    "horizonDays": 34.321527777777774,
-    "minProductRate": 0.8333333333333334,
-    "meanProductRate": 0.9840808667561185
+    "cpMakespan": 1790780760000.0,
+    "bakeMakespan": 1790676840000.0,
+    "makespan": 1790780760000.0,
+    "horizonDays": 29.9625,
+    "minProductRate": 1.0,
+    "meanProductRate": 1.0
   },
   "trials": [
     {
       "bakeWindowHours": 0,
-      "minProductRate": 0.8125,
-      "completedMonth": 456,
-      "completedWafers": 10599
+      "minProductRate": 1.0,
+      "completedMonth": 476,
+      "completedWafers": 11000
     },
     {
       "bakeWindowHours": 4,
-      "minProductRate": 0.8333333333333334,
-      "completedMonth": 460,
-      "completedWafers": 10696
+      "minProductRate": 0.9036144578313253,
+      "completedMonth": 471,
+      "completedWafers": 10924
     },
     {
       "bakeWindowHours": 8,
       "minProductRate": 0.8333333333333334,
-      "completedMonth": 459,
-      "completedWafers": 10674
+      "completedMonth": 469,
+      "completedWafers": 10898
     }
   ],
   "checks": {
@@ -87,11 +87,11 @@
       "platform": "CP-A",
       "mps": 800,
       "unit": "wafer",
-      "completed": 675,
-      "completedWafers": 675,
-      "completedLots": 27,
-      "rate": 0.84375,
-      "gap": 125
+      "completed": 800,
+      "completedWafers": 800,
+      "completedLots": 32,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN02",
@@ -318,11 +318,11 @@
       "platform": "CP-A",
       "mps": 180,
       "unit": "wafer",
-      "completed": 150,
-      "completedWafers": 150,
-      "completedLots": 6,
-      "rate": 0.8333333333333334,
-      "gap": 30
+      "completed": 180,
+      "completedWafers": 180,
+      "completedLots": 8,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN23",
@@ -351,11 +351,11 @@
       "platform": "CP-A",
       "mps": 171,
       "unit": "wafer",
-      "completed": 150,
-      "completedWafers": 150,
-      "completedLots": 6,
-      "rate": 0.8771929824561403,
-      "gap": 21
+      "completed": 171,
+      "completedWafers": 171,
+      "completedLots": 7,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN26",
@@ -384,11 +384,11 @@
       "platform": "CP-A",
       "mps": 108,
       "unit": "wafer",
-      "completed": 100,
-      "completedWafers": 100,
-      "completedLots": 4,
-      "rate": 0.9259259259259259,
-      "gap": 8
+      "completed": 108,
+      "completedWafers": 108,
+      "completedLots": 5,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN29",
@@ -450,11 +450,11 @@
       "platform": "CP-A",
       "mps": 193,
       "unit": "wafer",
-      "completed": 175,
-      "completedWafers": 175,
-      "completedLots": 7,
-      "rate": 0.9067357512953368,
-      "gap": 18
+      "completed": 193,
+      "completedWafers": 193,
+      "completedLots": 8,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN35",
@@ -483,11 +483,11 @@
       "platform": "CP-A",
       "mps": 217,
       "unit": "wafer",
-      "completed": 200,
-      "completedWafers": 200,
-      "completedLots": 8,
-      "rate": 0.9216589861751152,
-      "gap": 17
+      "completed": 217,
+      "completedWafers": 217,
+      "completedLots": 9,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN38",
@@ -681,11 +681,11 @@
       "platform": "CP-A",
       "mps": 249,
       "unit": "wafer",
-      "completed": 225,
-      "completedWafers": 225,
-      "completedLots": 9,
-      "rate": 0.9036144578313253,
-      "gap": 24
+      "completed": 249,
+      "completedWafers": 249,
+      "completedLots": 10,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN56",
@@ -747,11 +747,11 @@
       "platform": "CP-A",
       "mps": 117,
       "unit": "wafer",
-      "completed": 100,
-      "completedWafers": 100,
-      "completedLots": 4,
-      "rate": 0.8547008547008547,
-      "gap": 17
+      "completed": 117,
+      "completedWafers": 117,
+      "completedLots": 5,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN62",
@@ -780,11 +780,11 @@
       "platform": "CP-A",
       "mps": 271,
       "unit": "wafer",
-      "completed": 250,
-      "completedWafers": 250,
-      "completedLots": 10,
-      "rate": 0.922509225092251,
-      "gap": 21
+      "completed": 271,
+      "completedWafers": 271,
+      "completedLots": 11,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN65",
@@ -813,11 +813,11 @@
       "platform": "CP-A",
       "mps": 264,
       "unit": "wafer",
-      "completed": 250,
-      "completedWafers": 250,
-      "completedLots": 10,
-      "rate": 0.946969696969697,
-      "gap": 14
+      "completed": 264,
+      "completedWafers": 264,
+      "completedLots": 11,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN68",
@@ -846,11 +846,11 @@
       "platform": "CP-A",
       "mps": 109,
       "unit": "wafer",
-      "completed": 100,
-      "completedWafers": 100,
-      "completedLots": 4,
-      "rate": 0.9174311926605505,
-      "gap": 9
+      "completed": 109,
+      "completedWafers": 109,
+      "completedLots": 5,
+      "rate": 1.0,
+      "gap": 0
     },
     {
       "ppn": "PPN71",

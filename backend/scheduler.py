@@ -16,6 +16,9 @@ MIN = 60000
 HOUR = 3600000
 DAY = 86400000
 CST = timezone(timedelta(hours=8))
+# Give products with more total CP work a small priority boost so long routes
+# do not become the tail of the month.  Fair share remains the primary key.
+PRODUCT_WORK_WEIGHT = 0.20
 
 
 @lru_cache(maxsize=8192)
@@ -95,6 +98,11 @@ class Heap:
 
 
 def _fair(a, b):
+    # Lower fair rank first; large total-work products get a small head start.
+    a_score = a['fairRank'] - PRODUCT_WORK_WEIGHT * a.get('prodWorkShare', 0)
+    b_score = b['fairRank'] - PRODUCT_WORK_WEIGHT * b.get('prodWorkShare', 0)
+    if abs(a_score - b_score) > 1e-12:
+        return -1 if a_score < b_score else 1
     if a['fairRank'] != b['fairRank']:
         return -1 if a['fairRank'] < b['fairRank'] else 1
     if a['prod'] != b['prod']:
@@ -106,6 +114,60 @@ def _fair(a, b):
 
 def _sort_fair(rows):
     rows.sort(key=cmp_to_key(_fair))
+
+
+def _busy_ms(intervals, start, end):
+    total = 0
+    for begin, finish in intervals:
+        total += max(0, min(end, finish) - max(start, begin))
+    return total
+
+
+def _assign_preferred_types(ctx):
+    """Pre-allocate lots across CP groups by remaining monthly machine time.
+
+    Products that can only run in one group are placed first. Flexible lots are
+    then placed largest-load first into the group with the most remaining time,
+    which keeps scarce groups available for single-group products.
+    """
+    month_ms = ctx['monthEnd'] - ctx['start']
+    remaining = {}
+    for machine in ctx['machines']:
+        if not machine['available']:
+            continue
+        blocked = list(machine.get('pm') or []) + list(machine.get('reserved') or [])
+        busy = _busy_ms(blocked, ctx['start'], ctx['monthEnd'])
+        remaining[machine['type']] = remaining.get(machine['type'], 0) + max(
+            0, month_ms - busy)
+
+    max_prod_work = max([lot.get('prodWork') or 0 for lot in ctx['lots']] + [1])
+    for lot in ctx['lots']:
+        lot['prodWorkShare'] = (lot.get('prodWork') or 0) / max_prod_work
+        lot['cpLoadMs'] = sum(
+            op[2] * MIN * lot['wafer'] for op in lot['ops']
+            if str(op[0]).startswith('CP')) + lot.get('cpCount', 0) * 5 * MIN
+
+    def choose(lot):
+        choices = [group for group in lot.get('usableTypes') or []
+                   if group in remaining]
+        if not choices:
+            return None
+        return max(choices, key=lambda group: remaining[group])
+
+    # Fixed single-group products reserve their group first.
+    for lot in ctx['lots']:
+        if len(lot.get('usableTypes') or []) == 1:
+            group = lot['usableTypes'][0]
+            lot['preferredType'] = group
+            remaining[group] = remaining.get(group, 0) - lot['cpLoadMs']
+    flexible = [lot for lot in ctx['lots']
+                if len(lot.get('usableTypes') or []) > 1]
+    for lot in sorted(flexible, key=lambda item: (-item['cpLoadMs'], item['id'])):
+        group = choose(lot)
+        if group is None:
+            continue
+        lot['preferredType'] = group
+        remaining[group] = remaining.get(group, 0) - lot['cpLoadMs']
 
 
 def _parse_route(data, product):
@@ -286,16 +348,17 @@ def simulate(data, options):
         ops = _parse_route(data, product)
         rank = order.get(product, 0)
         order[product] = rank + row[3]
+        cp_per_wafer = sum(
+            op[2] for op in ops if str(op[0]).startswith('CP'))
         lot = {
             'id': row[0], 'prod': product, 'platform': row[2], 'type': row[2],
             'wafer': row[3], 'release': row[4], 'week': row[5],
             'weeklyDue': row[6], 'monthlyDue': row[7], 'priority': row[8],
             'ops': ops,
             'cpCount': sum(1 for op in ops if str(op[0]).startswith('CP')),
-            'cpMinutesPerWafer': sum(
-                op[2] for op in ops if str(op[0]).startswith('CP')),
-            'cpMinutes': sum(
-                op[2] for op in ops if str(op[0]).startswith('CP')) * row[3],
+            'cpMinutesPerWafer': cp_per_wafer,
+            'cpMinutes': cp_per_wafer * row[3],
+            'prodWork': cp_per_wafer * ctx['prodMps'].get(product, 0),
             'cpTasks': [], 'routeTasks': [], 'bakeTasks': [],
             'cpEnd': None, 'bakeStart': None, 'bakeEnd': None,
             'complete': float('inf'), 'monthEnd': month_end,
@@ -306,22 +369,33 @@ def simulate(data, options):
         ctx['lots'].append(lot)
         allowed = groups(lot['platform'])
         lot['allowedTypes'] = allowed
-        bad = None
-        for op in ops:
-            if not str(op[0]).startswith('CP'):
-                continue
-            cards = ctx['recipeCards'].get(op[1])
-            compatible = any(
-                m['available'] and m['type'] in allowed
-                and (m['id'] + '|' + str(op[1])) not in forbidden
-                for m in ctx['machines'])
-            if not cards or not compatible:
-                bad = op
-                break
-        if not ops or bad:
+        cp_ops = [op for op in ops if str(op[0]).startswith('CP')]
+        usable = []
+        if not cp_ops:
+            usable = list(allowed)
+        else:
+            for group in allowed:
+                group_machines = ctx['eqpByType'].get(group) or []
+                if not group_machines:
+                    continue
+                ok = True
+                for op in cp_ops:
+                    cards = ctx['recipeCards'].get(op[1])
+                    if not cards or not any(
+                            m['available'] and m['type'] == group
+                            and (m['id'] + '|' + str(op[1])) not in forbidden
+                            for m in group_machines):
+                        ok = False
+                        break
+                if ok:
+                    usable.append(group)
+        lot['usableTypes'] = usable
+        if not ops or (cp_ops and not usable):
             lot['unscheduledReason'] = '路线缺失或没有 RUN/兼容/非禁加工机台'
             continue
         events.push(lot['ready'], lot)
+
+    _assign_preferred_types(ctx)
 
     def enter(lot, when):
         if lot['index'] >= len(lot['ops']):
@@ -372,6 +446,8 @@ def simulate(data, options):
                     continue
                 lot = queue[0]
                 op = lot['ops'][lot['index']]
+                if lot.get('preferredType') and machine['type'] != lot['preferredType']:
+                    continue
                 if machine['type'] not in lot['allowedTypes'] or (
                         machine['id'] + '|' + str(op[1])) in forbidden:
                     continue

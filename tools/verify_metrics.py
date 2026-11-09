@@ -127,6 +127,8 @@ def verify(data, output_dir):
         completed = sum(1 for lot in result['lots']
                         if lot['complete'] <= result['monthEnd'])
         assert metrics['completedLots'] == completed
+        assert metrics['completedWafers'] == metrics['totalWafers']
+        assert metrics['completedLots'] == metrics['totalLots']
         for product in result['productStats']:
             expected = sum(lot['wafer'] for lot in result['lots']
                            if lot['prod'] == product['ppn']

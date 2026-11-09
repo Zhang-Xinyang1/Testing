@@ -100,8 +100,7 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertTrue(scheduled['ok'])
                 self.assertEqual(scheduled['result']['metrics']['totalLots'],
                                  len(self.data['lots']))
-                self.assertLessEqual(scheduled['result']['metrics']['completedWafers'], 11000)
-                self.assertGreater(scheduled['result']['metrics']['completedWafers'], 0)
+                self.assertEqual(scheduled['result']['metrics']['completedWafers'], 11000)
                 self.assertEqual(scheduled['result']['metrics']['completedWafers'],
                                  sum(p['completed'] for p in scheduled['result']['productStats']))
                 reserved = post('/api/oracle/config', {'host': 'db.internal', 'port': 1521,

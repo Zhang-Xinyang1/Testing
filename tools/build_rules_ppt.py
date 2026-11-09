@@ -16,7 +16,7 @@ DEFAULT_OUTPUT = ROOT / '.artifacts/rules-draft.pptx'
 
 def pages_for(metrics):
     return [
-        ('Testing 排程业务规则', 'wafer 口径与六种固定路线', [
+        ('Testing 排程业务规则', 'wafer 口径与七种固定路线', [
             '72 个产品，MPS 合计 11,000 片 wafer',
             '按 Lot 排程，按完工 wafer 统计 MPS 达成率',
             'BAKE 恢复 2h 升温和 2h 降温，完整规则以本版为准']),
@@ -38,18 +38,19 @@ def pages_for(metrics):
             '约束条件记录具体机台禁止加工的 Recipe']),
         ('工序顺序与时长', '只执行产品路线中实际存在的工序', [
             '同一 PROD 的原表行顺序就是执行顺序，不按 STEP 重排',
-            '采用已确认六种顺序，所有等待步骤统一为 QTIME1',
+            '采用已确认七种顺序，所有等待步骤统一为 QTIME1',
             'CP：TIME 为分钟/wafer，按 Lot 实际片数折算',
             'BAKE 和 QTIME 的 TIME 为空，从 RECIPE 解析加工/等待时长']),
-        ('六种合法路线：1–3', 'FLOW 是顺序模式的概括，不新增业务表字段', [
+        ('七种合法路线：1–4', 'FLOW 是顺序模式的概括，不新增业务表字段', [
             '1. CP1、BAKE、CP2、BAKE、CP3、QTIME1、CP4',
             '2. CP1、BAKE、CP2、QTIME1、CP3',
-            '3. CP1、BAKE、CP2、QTIME1、CP3、CP4']),
-        ('六种合法路线：4–6', '两次 BAKE 是不同工序，分别匹配各行 Recipe', [
-            '4. CP1、BAKE、CP2、BAKE、CP3、CP4、QTIME1',
+            '3. CP1、BAKE、CP2、QTIME1、CP3、CP4',
+            '4. CP1、BAKE、CP2、BAKE、CP3、CP4、QTIME1']),
+        ('七种合法路线：5–7', '两次 BAKE 是不同工序，分别匹配各行 Recipe', [
             '5. CP1、BAKE、CP2',
             '6. CP1、BAKE、CP2、BAKE、CP3',
-            '合成验证暂按每种 12 个 PPN 分配，真实产品归属待替换']),
+            '7. CP1、BAKE、CP2、CP3',
+            '当前合成算例仍按六种路线各 12 个 PPN；配置已支持第七种']),
         ('CP 机台与针卡', '资格筛选与时间占用分别判断', [
             '仅 Status=RUN 可用于生产，月初默认空闲',
             '多 Platform 表示同一道 CP 可任选其中一个机台组',
@@ -88,7 +89,8 @@ def pages_for(metrics):
         ('MPS 达成率与均衡目标', '数量统一按 wafer，资源调度仍按 Lot', [
             'PPN 达成率 = 月内完整路线完成 wafer / 该产品 MPS wafer',
             '优先改善低达成率产品，再比较月内完成 wafer 总量',
-            '公平派工按累计 wafer 份额计算，避免把尾批当成满批产出',
+            '可跨组 Lot 先按剩余 CP 机时分配到非瓶颈组',
+            '长路线、大 CP 工作量产品获得少量派工优先级',
             '启发式比较立即开批、等待4h、8h，不声称全局最优']),
         ('本轮合成算例结果', '基于 11,000 wafer 与 2+24+2h 的新口径', [
             '月内完整路线完成 {:,} / 11,000 wafer，达成率 {:.2f}%'.format(
@@ -107,7 +109,7 @@ def pages_for(metrics):
             '不同工序单位分别计算，最终产出统一还原为 wafer']),
         ('输入假设与生产边界', '保留已确认规则，合成数据单独标明', [
             '27 台 CP 暂按三个组各 9 台，机台组名称为占位',
-            '六种路线暂各分配 12 个产品，工时与计划明细为合成占位',
+            '当前算例六种路线各 12 个产品；配置已支持七种路线',
             '满25片加尾批只是缺少明细时的默认拆法，不强制实际满批',
             '此结果用于核对业务逻辑，不作为真实现场产能承诺']),
     ]
@@ -156,7 +158,7 @@ def build(report_path, output_path):
         for offset, line in enumerate(body):
             textbox(slide, line, 70, 218 + offset * 94, 1120, 80, 29,
                     '#FFFFFF' if dark else '#183846')
-        textbox(slide, '2026-11-06 确认的业务规则', 66, 676, 960, 24, 16, '#81999E')
+        textbox(slide, '2026-11-06 确认 / 2026-11-09 修订', 66, 676, 960, 24, 16, '#81999E')
         textbox(slide, '%02d' % (index + 1), 1180, 676, 50, 24, 16, '#81999E')
         slide.notes_slide.notes_text_frame.text = (
             '依据：本次用户确认 MPS=11,000 wafer、每Lot最多25片、实际拆分优先，'

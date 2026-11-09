@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / '.artifacts/rules-draft.pptx'
-DEFAULT_OUTPUT = ROOT / 'output/Testing排程_wafer口径与六种路线.pptx'
+DEFAULT_OUTPUT = ROOT / 'output/Testing排程_wafer口径与七种路线.pptx'
 REQUIRED_PARTS = ('[Content_Types].xml', 'ppt/presentation.xml')
 
 

@@ -178,13 +178,14 @@ def build_rows():
     ]
     manifest = {
         'synthetic': True, 'seed': 20261106, 'patterns': patterns,
-        'productsPerPattern': 12,
+        'routePatternCount': len(patterns),
+        'products': len(mps),
         'sheets': [{'name': name, 'header': rows[0], 'rows': len(rows) - 1}
                    for name, rows in sheets],
         'mps': sum(row[2] for row in mps), 'unit': 'wafer',
         'lotSizing': 'default-25-tail',
-        'assumptions': '27 CP / 9 per group; six confirmed route patterns assigned '
-                       'cyclically, 12 synthetic products each; synthetic CP TIME is minutes '
+        'assumptions': '27 CP / 9 per group; seven confirmed route patterns assigned '
+                       'cyclically across 72 synthetic products; synthetic CP TIME is minutes '
                        'per wafer, other times and plans are placeholders',
     }
     return sheets, manifest

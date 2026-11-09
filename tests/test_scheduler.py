@@ -103,6 +103,21 @@ class SchedulerRuleTests(unittest.TestCase):
         self.assertTrue(all(task['machine'] == 'M2' for task in result['cpTasks']))
         self.assertFalse(any('缺少在制' in alert['title'] for alert in result['alerts']))
 
+    def test_flexible_lot_moves_to_group_with_spare_monthly_capacity(self):
+        data = fixture(2)
+        data['meta']['days'] = 1
+        data['mps'].append({'ppn': 'Q', 'platform': 'A', 'mps': 25})
+        data['lots'].append(['Q0', 'Q', 'A', 25, '2026-09-01', 'W1',
+                             '2026-09-07', '2026-10-01', 1])
+        data['flows'] = {'P': [['CP1', 'R', 10]], 'Q': [['CP1', 'R', 50]]}
+        result = run(data)
+        p_tasks = [task for task in result['cpTasks'] if task['prod'] == 'P']
+        q_tasks = [task for task in result['cpTasks'] if task['prod'] == 'Q']
+        self.assertTrue(p_tasks)
+        self.assertTrue(q_tasks)
+        self.assertTrue(all(task['machine'] == 'M2' for task in p_tasks))
+        self.assertTrue(all(task['machine'] == 'M1' for task in q_tasks))
+
     def test_alternative_platform_and_prohibited_recipe_choose_other_machine(self):
         data = fixture(1)
         data['flows']['P'] = [['CP1', 'R', 10]]
