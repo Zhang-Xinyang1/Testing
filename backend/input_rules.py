@@ -1,8 +1,61 @@
 """Shared date, product and lot-reference semantics for every backend layer."""
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 CST = timezone(timedelta(hours=8))
+
+
+def identifier(value):
+    """Canonical business identifier; punctuation and internal spaces matter."""
+    text = unicodedata.normalize('NFKC', str(value if value is not None else ''))
+    return re.sub(r'[\ufeff\u200b\u200c\u200d\u2060]', '', text).strip().upper()
+
+
+def normalize_identifiers(data):
+    """Copy reference fields consistently for import, API, solver and diagnostics.
+
+    Lot display IDs and user text are preserved. WIP binds display IDs separately
+    so case variants still require a row key when they refer to multiple rows.
+    """
+    result = dict(data)
+    fields = {
+        'mps': ('ppn',), 'weekly': ('ppn', 'week'),
+        'eqp': ('id', 'card', 'recipe'), 'recipes': ('recipe',),
+        'pm': ('eqp',), 'borrow': ('eqp',),
+        'constraints': ('eqp', 'recipe', 'type'),
+        'wip': ('lotKey', 'eqp', 'chamber', 'card'),
+    }
+    for table, columns in fields.items():
+        if table not in data:
+            continue
+        result[table] = [{**row, **{key: identifier(row[key]) for key in columns if key in row}}
+                         for row in data[table]]
+    for row in result.get('recipes', []):
+        if isinstance(row.get('cards'), list):
+            row['cards'] = [identifier(card) for card in row['cards']]
+    if 'lots' in data:
+        result['lots'] = [list(row) for row in data['lots']]
+        for row in result['lots']:
+            for index in (1, 5):
+                if index < len(row):
+                    row[index] = identifier(row[index])
+    if 'flows' in data:
+        flows = {}
+        for product, route in data['flows'].items():
+            key = identifier(product)
+            normalized = [[identifier(op[0]), identifier(op[1]), *op[2:]] for op in route]
+            if key in flows and flows[key] != normalized:
+                raise ValueError('同一产品有大小写不同且内容冲突的路线：' + key)
+            flows[key] = normalized
+        result['flows'] = flows
+    if 'bakeResources' in data:
+        result['bakeResources'] = dict(data['bakeResources'])
+        if 'ids' in data['bakeResources']:
+            result['bakeResources']['ids'] = [identifier(v) for v in data['bakeResources']['ids']]
+    if 'cardType' in data:
+        result['cardType'] = {identifier(k): identifier(v) for k, v in data['cardType'].items()}
+    return result
 
 
 def parse_datetime(value):
@@ -30,19 +83,20 @@ def parse_datetime(value):
 
 
 def base_ppn(value):
-    return str(value or '').strip().split('-', 1)[0].strip()
+    return identifier(value).split('-', 1)[0].strip()
 
 
 def flow_product(lot_id, explicit, flows):
-    explicit = str(explicit or '').strip()
+    explicit = identifier(explicit)
+    keys = {identifier(key): key for key in flows}
     for candidate in (explicit, base_ppn(explicit)):
-        if candidate in flows:
-            return candidate
-    parts = str(lot_id or '').strip().split('-')
+        if candidate in keys:
+            return keys[candidate]
+    parts = identifier(lot_id).split('-')
     for size in range(len(parts), 0, -1):
         candidate = '-'.join(parts[:size]).strip()
-        if candidate in flows:
-            return candidate
+        if candidate in keys:
+            return keys[candidate]
     return explicit or base_ppn(lot_id)
 
 
@@ -68,16 +122,16 @@ def resolve_wip(data):
     by_key = {row_key(index): row for index, row in enumerate(rows)}
     by_id = {}
     for key, row in by_key.items():
-        by_id.setdefault(row[0], []).append(key)
+        by_id.setdefault(identifier(row[0]), []).append(key)
     resolved, seen = [], set()
     for source in data.get('wip') or []:
         item = dict(source)
-        lid, key = item.get('lotId'), item.get('lotKey')
+        lid, key = item.get('lotId'), identifier(item.get('lotKey'))
         if key:
-            if key not in by_key or by_key[key][0] != lid:
+            if key not in by_key or identifier(by_key[key][0]) != identifier(lid):
                 raise ValueError('在制 Lot 行键与 LotID 不匹配：%s / %s' % (key, lid))
         else:
-            choices = by_id.get(lid, [])
+            choices = by_id.get(identifier(lid), [])
             if not choices:
                 raise ValueError('在制 Lot 无效或重复：' + str(lid))
             if len(choices) > 1:
@@ -89,5 +143,6 @@ def resolve_wip(data):
             raise ValueError('在制 Lot 无效或重复：' + str(lid))
         seen.add(key)
         item['lotKey'] = key
+        item['lotId'] = by_key[key][0]
         resolved.append(item)
     return resolved

@@ -4,7 +4,7 @@ import json, os, re, math, tempfile, urllib.request
 from datetime import datetime, timedelta, timezone
 from data_sources import oracle_settings, read_oracle
 from platforms import clean_type, normalize_platforms, split_platforms
-from input_rules import base_ppn, flow_product, ordered_plans, parse_datetime, resolve_wip
+from input_rules import base_ppn, flow_product, identifier, ordered_plans, parse_datetime, resolve_wip
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from build_data import read_workbook, clean_rows, num  # noqa: E402
 
 DEFAULT_CONFIG = os.path.join(ROOT, 'config', 'config.json')
+EMPTY_OPTIONAL_SHEETS = {'pm', 'borrow', 'constraints', 'wip', 'weekly', 'params'}
 
 
 def norm_key(value):
@@ -20,7 +21,7 @@ def norm_key(value):
     Case, whitespace, full-width spaces, BOM, underscores, hyphens and dots are
     ignored: ``EQP ID``, ``EQPID``, ``eqp_id`` and ``eqp-id`` are equivalent.
     """
-    text = str(value or '').replace('\ufeff', '').replace('\xa0', ' ')
+    text = identifier(value)
     text = text.casefold()
     return re.sub(r'[\s_\-.&＆]+', '', text)
 
@@ -74,13 +75,12 @@ def rows_for(sheets, sheet_name, header_row=1):
     def trimmed(rows):
         return clean_rows(rows[max(0, int(header_row) - 1):])
 
-    for name, rows in sheets:
-        if name == sheet_name:
-            return trimmed(rows)
     target = norm_key(sheet_name)
-    for name, rows in sheets:
-        if norm_key(name) == target:
-            return trimmed(rows)
+    matches = [(name, rows) for name, rows in sheets if norm_key(name) == target]
+    if len(matches) > 1:
+        raise ValueError('Sheet 匹配不唯一：%s；请统一 Sheet 名称。' % sheet_name)
+    if matches:
+        return trimmed(matches[0][1])
     raise KeyError('Sheet not found: ' + sheet_name)
 
 
@@ -181,6 +181,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             raise ValueError('已配置的 Sheet 不存在：%s → %s；请修正映射，'
                              '不使用此表时删除对应 Sheet 设置。' % (key, name))
         sheet_headers[name] = header
+        if not any(header) and not rows and key in EMPTY_OPTIONAL_SHEETS:
+            return header, rows
         mapping = mapping_for(name)
         required = {
             'mps': ('platform', 'ppn', 'mps'), 'eqp': ('type', 'id'),
@@ -258,7 +260,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     for r in card_rows:
         recipe = str(get(r, 'cards', 'recipe', '')).strip()
         raw = str(get(r, 'cards', 'cards', '') or r.get('ProberCard List', '') or r.get('ProbeCard List', ''))
-        cards.append({'recipe': recipe, 'cards': [x.strip() for x in raw.split(sep) if x.strip()]})
+        # Server exports use commas; retain configured separators as well.
+        parts = re.split(r'[;,，；、\r\n]+|' + re.escape(sep), raw)
+        cards.append({'recipe': recipe, 'cards': list(dict.fromkeys(identifier(x) for x in parts if identifier(x)))})
 
     # ---- Flow ----
     # CP.TIME is minutes per wafer; BAKE/QTIME override duration from RECIPE.
@@ -266,12 +270,12 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     flow_order = {'BAKE': 90, 'QTIME1': 100}
     fl = {}
     for r in flow_rows:
-        prod = str(get(r, 'flow', 'prod', '')).strip()
-        step = str(get(r, 'flow', 'step', '')).strip()
+        prod = identifier(get(r, 'flow', 'prod', ''))
+        step = identifier(get(r, 'flow', 'step', ''))
         if not prod or not step:
             continue
         order = len(fl.get(prod, []))
-        recipe = str(get(r, 'flow', 'recipe', '')).strip()
+        recipe = identifier(get(r, 'flow', 'recipe', ''))
         duration = getn(r, 'flow', 'time', 0)
         if step == 'BAKE':
             match = re.fullmatch(r'(210|250)C(24)H', recipe)
@@ -458,8 +462,8 @@ def validate_schedule(data):
     require(all(isinstance(r, str) and r.strip() for r in recipe_ids)
             and len(set(recipe_ids)) == len(recipe_ids), 'Recipe 名称不能为空或重复')
     for recipe in data['recipes']:
-        require(isinstance(recipe['cards'], list) and 1 <= len(recipe['cards']) <= 4,
-                'Recipe 候选针卡类型必须为 1 至 4 种：' + recipe['recipe'])
+        require(isinstance(recipe['cards'], list) and len(recipe['cards']) >= 1,
+                'Recipe 至少需要一种候选针卡类型：' + recipe['recipe'])
         require(all(isinstance(c, str) and c.strip() for c in recipe['cards']),
                 'Recipe 候选针卡类型不能为空：' + recipe['recipe'])
         require(len(set(recipe['cards'])) == len(recipe['cards']),

@@ -39,8 +39,9 @@ def read_workbook(path):
         date_styles = set()
         if 'xl/styles.xml' in z.namelist():
             root = ET.fromstring(z.read('xl/styles.xml'))
-            custom = set()
+            custom, declared = set(), set()
             for nf in root.iter('{%s}numFmt' % NS['m']):
+                declared.add(int(nf.get('numFmtId')))
                 code = nf.get('formatCode', '').lower()
                 code = re.sub(r'"[^"]*"|\\.|\[[^]]*\]', '', code)
                 if re.search(r'(?<!\[)[ymdhs]', code) and '#' not in code and '0.0' not in code:
@@ -49,7 +50,10 @@ def read_workbook(path):
             if xfs is not None:
                 for i, xf in enumerate(xfs.findall('m:xf', NS)):
                     fid = int(xf.get('numFmtId', '0'))
-                    if fid in custom or 14 <= fid <= 22 or 45 <= fid <= 47:
+                    # Includes East Asian built-ins (e.g. WPS/Excel numFmtId 58).
+                    builtin_date = (14 <= fid <= 22 or 27 <= fid <= 36
+                                    or 45 <= fid <= 47 or 50 <= fid <= 58)
+                    if fid in custom or (fid not in declared and builtin_date):
                         date_styles.add(i)
         wb = ET.fromstring(z.read('xl/workbook.xml'))
         props = wb.find('m:workbookPr', NS)

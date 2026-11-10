@@ -7,9 +7,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'backend'))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
-from server_core import (DEFAULT_CONFIG, load_config, mapped_column,
-                         norm_key, read_source)  # noqa: E402
-from build_data import clean_rows, read_workbook  # noqa: E402
+from server_core import (DEFAULT_CONFIG, EMPTY_OPTIONAL_SHEETS, load_config, mapped_column,
+                         norm_key, read_source, rows_for)  # noqa: E402
+from build_data import read_workbook  # noqa: E402
 
 
 FIELDS = {
@@ -101,7 +101,6 @@ def main():
     finally:
         if source.get('path', '').startswith(('http://', 'https://')):
             os.unlink(path)
-    sheets = {name: rows for name, rows in workbook}
     header_row = int(source.get('headerRow', 1))
     sheet_map = source.get('sheetMap', {})
     field_map = cfg.get('fieldMap', {})
@@ -116,15 +115,17 @@ def main():
         if not sheet:
             print('  当前配置不读取此表；需要时在 Sheet 设置中增加 "%s"。' % key)
             continue
-        actual = sheet if sheet in sheets else next((name for name in sheets if norm_key(name) == norm_key(sheet)), None)
-        if actual is None:
-            print('  !! 找不到 Sheet：%s' % sheet)
+        try:
+            header, data = rows_for(workbook, sheet, header_row)
+        except (KeyError, ValueError) as error:
+            print('  !! ' + str(error))
             failures += 1
             continue
-        rows = sheets[actual][max(0, header_row - 1):]
-        header, data = clean_rows(rows)
         print('  实际表头：' + ' | '.join(str(x) for x in header))
         print('  数据行：%d' % len(data))
+        if not any(header) and not data and key in EMPTY_OPTIONAL_SHEETS:
+            print('  空的可选计划表，按无记录处理。')
+            continue
         mapping = field_map.get(sheet)
         if mapping is None:
             mapping = next((value for name, value in field_map.items() if norm_key(name) == norm_key(sheet)), {})

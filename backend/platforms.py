@@ -1,6 +1,7 @@
-"""Shared formatting rules for Platform / EQP.TYPE, without machine aliases."""
+"""Canonical input references and Platform / EQP.TYPE, without machine aliases."""
 import re
 import unicodedata
+from input_rules import normalize_identifiers
 
 
 def clean_type(value):
@@ -22,6 +23,7 @@ def normalize_platforms(data):
     and typography are normalized consistently, including on the EQP side.
     Unknown models are retained for validation, never guessed or discarded.
     """
+    data = normalize_identifiers(data)
     result = dict(data)
     equipment = [dict(row, type=clean_type(row.get('type')), status=clean_type(row.get('status')))
                  for row in data.get('eqp', [])]
