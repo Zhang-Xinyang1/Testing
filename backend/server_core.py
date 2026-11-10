@@ -438,6 +438,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     }
     overrides = cfg.get('scheduling', {})
     meta['eqpSource'] = 'override' if 'eqp' in overrides else 'excel'
+    meta['planSources'] = {key: 'override' if key in overrides else 'excel'
+                           for key in ('pm', 'borrow', 'wip')}
     meta['excelCpTypes'] = sorted({clean_type(e['type']) for e in eqp
                                   if 'OVEN' not in clean_type(e['type']).upper()})
     for key in ('eqp', 'pm', 'borrow', 'platformType', 'cardType'):
@@ -455,6 +457,70 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     return payload
 
 
+def validate_input_dates(data):
+    """Report all invalid date fields with their table and input record identity."""
+    issues = []
+    meta = data.get('meta') or {}
+    names = {'borrow': '借机计划', 'pm': 'PM计划', 'wip': '在制',
+             'weekly': '周目标', 'lots': 'Lot明细'}
+
+    def blank(value):
+        return value is None or not str(value).strip()
+
+    def check(value, label, optional=False):
+        if blank(value):
+            if not optional:
+                issues.append(label + ' 为空')
+            return
+        try:
+            parse_datetime(value)
+        except (ValueError, TypeError, OverflowError):
+            issues.append(label + ' 无效，读取值：' + repr(value)[:120])
+
+    def field_label(table, index, row, field, default):
+        source = (meta.get('planSources') or {}).get(table)
+        sheet = (data.get('sheetMap') or {}).get(table)
+        origin = ('手工配置「%s」' % names[table] if source == 'override'
+                  else 'Sheet「%s」' % sheet if sheet else names[table])
+        mapping = next((m for key, m in (data.get('fieldMap') or {}).items()
+                        if sheet and norm_key(key) == norm_key(sheet)), {})
+        column = mapping.get(field) if source != 'override' else None
+        if isinstance(column, (list, tuple)):
+            column = ' / '.join(map(str, column))
+        identity = ', '.join('%s=%s' % (key, row[key])
+                             for key in ('eqp', 'lotId', 'lotKey', 'ppn', 'week') if row.get(key))
+        return '%s 第 %d 条%s，字段「%s」' % (
+            origin, index, '（%s）' % identity if identity else '', column or default)
+
+    check(meta.get('start'), '排产设置 meta.start（开始时间）')
+    for table, fields in (
+            ('pm', [('early', 'Early Due'), ('due', 'Due Date'), ('over', 'Over Due'), ('start', '指定开始')]),
+            ('borrow', [('date', 'DATE'), ('start', '指定开始')]),
+            ('weekly', [('start', 'Start'), ('end', 'End')]),
+            ('wip', [('start', '占用开始'), ('end', '预计释放')])):
+        for index, row in enumerate(data.get(table) or [], 1):
+            if not isinstance(row, dict) or (table == 'wip' and not row.get('eqp')):
+                continue
+            for field, default in fields:
+                optional = ((table in ('pm', 'borrow') and field == 'start')
+                            or (table == 'borrow' and field == 'date' and not blank(row.get('start'))))
+                check(row.get(field), field_label(table, index, row, field, default), optional)
+    for index, row in enumerate(data.get('lots') or [], 1):
+        if not isinstance(row, (list, tuple)) or len(row) < 8:
+            continue  # Shape validation supplies the separate structural error.
+        for position, field, default in ((4, 'release', 'Release Time'),
+                                          (6, 'weeklyDue', 'Weekly Due'), (7, 'monthlyDue', 'Monthly Due')):
+            check(row[position], field_label('lots', index, {'lotId': row[0]}, field, default))
+    if issues:
+        source = '文件「%s」；' % meta['source'] if meta.get('source') else ''
+        shown = '；'.join(issues[:20])
+        if len(issues) > 20:
+            shown += '；另有 %d 项，请先检查同类日期字段' % (len(issues) - 20)
+        raise ValueError(source + '日期/时间校验失败（共 %d 项）：%s。'
+                         '请核对字段映射和值；日期示例：2026-09-24，时间示例：2026-09-24 08:00。'
+                         % (len(issues), shown))
+
+
 def validate_schedule(data):
     """Validate business references and occupied resource calendars, without Excel writes."""
     data = normalize_platforms(data)
@@ -470,9 +536,9 @@ def validate_schedule(data):
 
     require(type(data['meta'].get('days')) is int and 1 <= data['meta']['days'] <= 366,
             '排产天数必须为 1 至 366 的整数')
-    date(data['meta'].get('start'))
     for key in ('eqp', 'pm', 'borrow', 'wip', 'mps', 'lots', 'recipes'):
         require(isinstance(data[key], list), key + ' 必须为记录列表')
+    validate_input_dates(data)
     recipe_ids = [r.get('recipe') for r in data['recipes']]
     require(all(isinstance(r, str) and r.strip() for r in recipe_ids)
             and len(set(recipe_ids)) == len(recipe_ids), 'Recipe 名称不能为空或重复')
