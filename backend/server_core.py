@@ -4,7 +4,8 @@ import json, os, re, math, tempfile, urllib.request
 from datetime import datetime, timedelta, timezone
 from data_sources import oracle_settings, read_oracle
 from platforms import clean_type, normalize_platforms, split_platforms
-from input_rules import base_ppn, flow_product, identifier, ordered_plans, parse_datetime, resolve_wip
+from input_rules import (base_ppn, flow_product, identifier, ordered_plans,
+                         parse_datetime, pm_events, resolve_pm_target, resolve_wip)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
@@ -237,6 +238,12 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     def getn(row, key, name, default=0):
         return num(get(row, key, name, default), default)
 
+    def optional_column(row, key, name, header):
+        # Recognize new optional columns even with an older saved fieldMap.
+        # A missing column must yield an empty value, never its header name.
+        value = row.get(field(key, name, header), '')
+        return value.strip() if isinstance(value, str) else value
+
     # ---- MPS ----
     _, mps_rows = rows_of('mps')
     mps = []
@@ -258,6 +265,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     for r in eqp_rows:
         eqp.append({'type': str(get(r, 'eqp', 'type', '')).strip(),
                     'id': str(get(r, 'eqp', 'id', '')).strip(),
+                    'proberId': str(optional_column(r, 'eqp', 'proberId', 'proberID') or '').strip(),
                     'card': str(get(r, 'eqp', 'currentCard', '')).strip(),
                     'recipe': str(get(r, 'eqp', 'currentRecipe', '')).strip(),
                     'status': str(get(r, 'eqp', 'status', '') or r.get('Status', '') or r.get('status', '')).strip().upper()})
@@ -317,7 +325,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     _, pm_rows = rows_of('pm')
     pm = [{'eqp': str(get(r, 'pm', 'eqp', '')).strip(),
            'early': get(r, 'pm', 'early', ''), 'due': get(r, 'pm', 'due', ''),
-           'over': get(r, 'pm', 'over', ''), 'hours': getn(r, 'pm', 'hours', 0)} for r in pm_rows]
+           'over': get(r, 'pm', 'over', ''), 'hours': getn(r, 'pm', 'hours', 0),
+           'targetKind': optional_column(r, 'pm', 'targetKind', 'TargetKind'),
+           'start': optional_column(r, 'pm', 'start', 'Start')} for r in pm_rows]
 
     _, con_rows = rows_of('constraints')
     constraints = [{'type': str(get(r, 'constraints', 'type', '')).strip(),
@@ -694,7 +704,10 @@ def validate_schedule(data):
                 require(len(group) <= 4, 'BAKE 在制组批超过 4 lot')
     for key in ('borrow', 'pm'):
         for p in data[key]:
-            require(p['eqp'] in (cp_ids if key == 'borrow' else set(ids) | bake_ids), '计划引用未知或不适用机台：' + p['eqp'])
+            if key == 'pm':
+                resolve_pm_target(data, p)
+            else:
+                require(p['eqp'] in cp_ids, '计划引用未知或不适用机台：' + p['eqp'])
             require(number(p['hours']) and 0 < p['hours'] <= 744, '计划时长必须大于 0 且不超过 744 小时')
             if key == 'borrow':
                 require(0.6 <= p['hours'] <= 24, '借机时数必须为 0.6 至 24 小时')
@@ -738,19 +751,15 @@ def calendar_issues(data):
             blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
         if missing:
             pm_blocked.setdefault(e['id'], []).append((date(data['meta']['start']), datetime.max.replace(tzinfo=zone)))
-    bake = data['bakeResources']
-    bake_ids = set(bake.get('ids', ['BAKE-%02d' % n for n in range(1, bake['machines'] + 1)]))
-    for index, p in ordered_plans(data['pm'], 'pm'):
-        resources = [p['eqp']]
-        if p['eqp'] in bake_ids:
-            resources = [p['eqp'] + '-C%d' % i for i in range(1, data['bakeResources']['chambers'] + 1)]
+    for p in pm_events(data):
+        resources = p['resources']
         spans = [span for resource in resources for span in pm_blocked.get(resource, [])]
         early = date(p['early'])
         duration = timedelta(hours=p['hours'])
         latest = date(p['over']) + timedelta(days=1) - duration
         start = gap(spans, date(p['start']) if p.get('start') else early, duration, latest)
         if start is None or (p.get('start') and start != date(p['start'])):
-            issues.append('PM 第 %d 条 %s：与在制占用或其他 PM 冲突，窗口内无可用时段' % (index + 1, p['eqp']))
+            issues.append('PM %s %s：与在制占用或其他 PM 冲突，窗口内无可用时段' % ('、'.join(p['sourceIds']), p['eqp']))
             continue
         for resource in resources:
             span = (start, start + duration)

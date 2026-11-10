@@ -56,7 +56,7 @@
     var names = {mps:'MPS', eqp:'EQP', cards:'针卡', flow:'测试flow&工时', borrow:'借机计划', pm:'PM计划', constraints:'约束条件', params:'算例参数', lots:'Lot明细', weekly:'周目标'};
     name = names[role] || name;
     if (name === 'MPS') return { fields: mappedFields(sheetMap.mps || 'MPS', ['Platform', 'PPN', 'MPS'], ['platform', 'ppn', 'mps']), rows: d.mps.map(function (x) { return [x.platform, x.ppn, x.mps]; }) };
-    if (name === 'EQP') return { fields: ['TYPE', 'EQPID', 'Current ProbeCard', 'Current Recipe', 'status'], rows: d.eqp.map(function (x) { return [x.type, x.id, x.card, x.recipe, x.status]; }) };
+    if (name === 'EQP') return { fields: ['TYPE', 'EQPID', 'proberID', 'Current ProbeCard', 'Current Recipe', 'status'], rows: d.eqp.map(function (x) { return [x.type, x.id, x.proberId || '', x.card, x.recipe, x.status]; }) };
     if (name === '针卡') return { fields: ['Recipe', 'ProbeCard List'], rows: d.recipes.map(function (x) { return [x.recipe, x.cards.join(';')]; }) };
     if (name === '测试flow&工时') {
       var rows = [];
@@ -64,7 +64,7 @@
       return { fields: mappedFields(sheetMap.flow || '测试flow&工时', ['PROD', 'STEP', 'RECIPE', 'TIME'], ['prod', 'step', 'recipe', 'time']), rows: rows };
     }
     if (name === '借机计划') return { fields: ['DATE', 'EQPID', '借机时数', 'Generated At'], rows: d.borrow.map(function (x) { return [x.date, x.eqp, x.hours, x.generatedAt || '']; }) };
-    if (name === 'PM计划') return { fields: ['EQPID', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours'], rows: d.pm.map(function (x) { return [x.eqp, x.early, x.due, x.over, x.hours]; }) };
+    if (name === 'PM计划') return { fields: ['维护对象（EQPID / proberID）', 'TargetKind', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours', 'Start'], rows: d.pm.map(function (x) { return [x.eqp, x.targetKind || '自动识别', x.early, x.due, x.over, x.hours, x.start || '']; }) };
     if (name === '约束条件') return { fields: ['TYPE', 'EQPID', 'Constraint Recipe'], rows: (d.constraints || []).map(function (x) { return [x.type, x.eqp, x.recipe]; }) };
     if (name === '算例参数') return { fields: ['类别', '参数', '对象', '值', '单位', '依据'], rows: (d.rules || []).map(function (x) { return [x.category, x.parameter, x.object, x.value, x.unit, x.basis]; }) };
     if (name === 'Lot明细') return { fields: d.lotFields || [], rows: d.lots };
@@ -122,7 +122,7 @@ function validationHTML() {
     var cards = {};
     (d.recipes || []).forEach(function (x) { x.cards.forEach(function (c) { cards[c] = 1; }); });
     checks.push([true, '针卡类型：' + Object.keys(cards).length + ' 种，实物数量充足，可跨机并行']);
-    checks.push([r.metrics.pmInWindow === r.metrics.pmCount, 'PM 窗口：' + r.metrics.pmInWindow + ' / ' + r.metrics.pmCount + ' 次在允许窗口内']);
+    checks.push([r.metrics.pmInWindow === r.metrics.pmCount, 'PM 窗口：' + r.metrics.pmInWindow + ' / ' + r.metrics.pmCount + ' 次在允许窗口内' + (r.metrics.pmMergedRows ? '（原始 ' + r.metrics.pmInputCount + ' 条，重叠维护已合并）' : '')]);
     var maxBatchLots = Math.max.apply(null, r.batches.map(function (b) { return b.lots.length; }).concat([0]));
     checks.push([maxBatchLots <= 4, 'BAKE 组批：最大 ' + maxBatchLots + ' lots（每腔上限 4 Lot，无 wafer 限制）']);
     checks.push([r.metrics.borrowCancelRate <= 0.1, '借机取消率：' + A.pct(r.metrics.borrowCancelRate, 1) + '（阈值 10%）']);

@@ -10,9 +10,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from server_core import merge_mps
 from platforms import normalize_platforms, split_platforms
-from input_rules import parse_datetime, resolve_wip, row_key
+from input_rules import identifier, parse_datetime, pm_events, resolve_wip, row_key
 
-VERSION = 'diag-4-row-wip'
+VERSION = 'diag-5-prober-pm'
 LOCK = threading.Lock()
 CATALOG = {
     'R01': ('机台重叠', '已确认', '查看冲突时段，核对资源占用。'),
@@ -25,6 +25,7 @@ CATALOG = {
     'R08': ('禁加工或资源资格异常', '已确认', '核对 RUN、机台组、候选针卡和禁加工规则。'),
     'R09': ('BAKE 时间异常', '已确认', '升温 2h、Recipe 加工 24h、降温 2h；加工结束放行 Lot，降温结束释放腔体。'),
     'R10': ('换卡计时异常', '已确认', '核对初始针卡、在制释放后的针卡类型和 5 分钟换卡占用。'),
+    'R11': ('PM 关联资源异常', '已确认', '核对维护对象、proberID 对应关系及全部关联 EQPID 的同步停机。'),
     'C01': ('无可用资源', '待核查', '核对工艺、机台 TYPE 和候选针卡。'),
     'C02': ('RUN 缺快照', '已确认', '补充在制资源占用和预计释放时间。'),
     'P01': ('月度未达成', '已确认', '当前方案存在缺口，不等于已证明无解。'),
@@ -158,12 +159,33 @@ def inspect_run(body):
             lid = item['id'] if isinstance(item, dict) else item
             if excluded(lid, item.get('key') if isinstance(item, dict) else None):
                 add('R06', lid)
+    pm_sources = {p['id']: p for p in pm_events(data)}
+    seen_pm = set()
     for p in result.get('pmRecords', []):
+        resources = p['resources']
+        if 'pm' in data:
+            source = pm_sources.get(p['id'])
+            if source is None or p['id'] in seen_pm:
+                add('R11', p['id'] + '：未知或重复的维护记录')
+            else:
+                if (set(resources) != set(source['resources'])
+                        or identifier(p['eqp']) != identifier(source['eqp'])
+                        or p.get('sourceIds', [p['id']]) != source['sourceIds']):
+                    add('R11', p['id'] + '：应同步停机 ' + '、'.join(source['affectedEqps']) + '；来源 ' + '、'.join(source['sourceIds']))
+                resources = source['resources']
+                if (abs(p['end'] - p['start'] - source['hours'] * 3600000) > 0.001
+                        or (source.get('start') and p['start'] != ms(source['start']))):
+                    add('R04', p['id'] + '：维护时长或指定开始时间不一致')
+                if p['start'] < ms(source['early']) or p['end'] > ms(source['over']) + 86400000:
+                    add('R04', p['id'] + '：超出来源维护窗口')
+            seen_pm.add(p['id'])
         if p['start'] < ms(p['early']) or p['end'] > ms(p['over']) + 86400000:
             add('R04', p['id'])
-        for resource in p['resources']:
+        for resource in resources:
             reserve(('machine:' if resource in eqps and 'OVEN' not in eqps[resource]['type'].upper() else 'chamber:') + resource,
                     p['start'], p['end'], p['id'], 'pm')
+    for missing in sorted(set(pm_sources) - seen_pm):
+        add('R11', missing + '：维护计划未执行')
     for b in result.get('borrows', []):
         if b['status'] == 'cancel':
             add('R05', b['id'] + '：' + b.get('reason', '未执行'))

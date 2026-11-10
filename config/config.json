@@ -23,6 +23,7 @@
     "EQP": {
       "type": "TYPE",
       "id": "EQPID",
+      "proberId": "proberID",
       "currentCard": "Current ProbeCard",
       "currentRecipe": "Current Recipe",
       "status": "Status"
@@ -48,7 +49,9 @@
       "early": "Early Due",
       "due": "Due Date",
       "over": "Over Due",
-      "hours": "Estimated Hours"
+      "hours": "Estimated Hours",
+      "targetKind": "TargetKind",
+      "start": "Start"
     },
     "约束条件": {
       "type": "TYPE",

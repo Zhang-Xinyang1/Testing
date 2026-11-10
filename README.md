@@ -52,6 +52,7 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 - [排程算法与优化验证](docs/technical/排程算法与优化验证.md)：LotID 修复核验、原算法结构、多起点局部搜索与压力测试结果。
 - [前端技术文档](docs/technical/前端技术文档.md)：模块、交互、排产规则、图示及现场限制。
 - [后端技术文档](docs/technical/后端技术文档.md)：上传、排产接口、校验、Oracle 扩展、部署与安全。
+- [MES 输入要求：EQP 与 PM](docs/technical/MES输入要求_EQP与PM.md)：prober 对应关系、维护对象字段、两次 PM 与指定时间重叠合并规则及结果示例。
 - [运行环境与依赖说明](docs/technical/环境依赖说明.md)：Python、可选第三方库、浏览器和测试工具版本。
 - [部署说明](部署说明.md)：跨平台一键启动、离线环境、维护与故障排查。
 - [品牌素材来源](frontend/assets/brand/README.md)。

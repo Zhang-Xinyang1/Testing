@@ -141,3 +141,44 @@ test('an uploaded workbook survives view rerenders and failed saves until commit
   assert.equal(app.state.config.dataSource.path, 'uploads/new.xlsx');
   assert.doesNotMatch(app.configurationHTML(), /新文件已上传，等待保存/);
 });
+
+test('equipment pairing and the original two PM rows survive configuration saves', async () => {
+  const env = environment(), app = env.app, listeners = {};
+  const nodes = {
+    '#cfg-path': {value:'paired.xlsx'}, '#cfg-file-status': {textContent:'paired.xlsx'},
+    '#cfg-result': {}, '#cfg-source': {value:'{"sheetMap":{},"headerRow":1}'},
+    '#cfg-fields': {value:'{}'}, '#cfg-month': {value:'2026-11'},
+    '#cfg-bake-machines': {value:'1'}, '#cfg-bake-chambers': {value:'4'},
+    '#cfg-kind': {value:'pm'}, '#cfg-machine': {value:'P1'}
+  };
+  const equipment = {id:'M1', type:'A', proberId:'P1', card:'C1', recipe:'R', status:'RUN'};
+  const plans = ['M1', 'P1'].map((eqp, index) => ({eqp, targetKind:index ? 'PROBER' : 'EQP',
+    early:'2026-11-10', due:'2026-11-10', over:'2026-11-10', hours:4,
+    start:index ? '2026-11-10T10:00' : '2026-11-10T08:00'}));
+  const toRow = object => ({fields:Object.entries(object).map(([field, value]) => ({
+    dataset:{field}, value:String(value), type:field === 'hours' ? 'number' : field === 'start' ? 'datetime-local' : 'text'
+  }))});
+  const rows = {eqp:[toRow(equipment)], pm:plans.map(toRow), borrow:[], wip:[]};
+  app.$ = selector => nodes[selector];
+  app.$$ = (selector, root) => root ? root.fields : (rows[(selector.match(/^#cfg-table-(\w+)/) || [])[1]] || []);
+  app.state.config = {dataSource:{path:'paired.xlsx', sheetMap:{}, headerRow:1}, fieldMap:{}};
+  app.state.data = {eqp:[equipment], pm:plans, borrow:[], wip:[], meta:{month:'2026-11'}};
+  app.SCHED.parseDate = Date.parse;
+  env.context.document = {addEventListener(type, callback) {listeners[type] = callback;}};
+  let posted;
+  env.context.fetch = async (url, request) => {
+    posted = JSON.parse(request.body);
+    return {ok:false, json:async()=>({error:'stop after preview capture'})};
+  };
+  vm.runInContext(env.read('configuration.js'), env.context);
+  const html = app.configurationHTML();
+  assert.match(html, /data-field="proberId"[^>]*value="P1"/);
+  assert.match(html, /value="PROBER" selected/);
+  assert.match(html, /指定时间重叠时合并维护/);
+  await listeners.click({target:{id:'cfg-save', closest:()=>null}});
+  assert.equal(posted.scheduling.eqp[0].proberId, 'P1');
+  assert.equal(posted.scheduling.pm.length, 2);
+  assert.deepEqual(posted.scheduling.pm.map(p => p.eqp), ['M1', 'P1']);
+  assert.equal(posted.scheduling.pm[1].targetKind, 'PROBER');
+  assert.equal(posted.scheduling.pm[1].start, '2026-11-10T10:00:00+08:00');
+});

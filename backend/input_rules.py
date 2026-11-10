@@ -21,8 +21,8 @@ def normalize_identifiers(data):
     result = dict(data)
     fields = {
         'mps': ('ppn',), 'weekly': ('ppn', 'week'),
-        'eqp': ('id', 'card', 'recipe'), 'recipes': ('recipe',),
-        'pm': ('eqp',), 'borrow': ('eqp',),
+        'eqp': ('id', 'proberId', 'card', 'recipe'), 'recipes': ('recipe',),
+        'pm': ('eqp', 'targetKind'), 'borrow': ('eqp',),
         'constraints': ('eqp', 'recipe', 'type'),
         'wip': ('lotKey', 'eqp', 'chamber', 'card'),
     }
@@ -114,6 +114,106 @@ def ordered_plans(plans, kind):
         deadline = (plan.get('start') or plan['over']) if kind == 'pm' else (plan.get('date') or plan['start'])
         return (not bool(plan.get('start')), parse_datetime(deadline), index)
     return sorted(enumerate(plans), key=order)
+
+
+def resolve_pm_target(data, plan):
+    """Resolve one maintenance event to all resources blocked at the same time.
+
+    Keep plan.eqp as the original maintenance object. A prober PM blocks every
+    CP tester associated with it in the effective equipment snapshot. Derived
+    fields supplied by callers are deliberately ignored and recomputed.
+    """
+    target = identifier(plan.get('eqp'))
+    kind = identifier(plan.get('targetKind'))
+    if kind not in ('', 'EQP', 'PROBER'):
+        raise ValueError('PM TargetKind 仅允许 EQP、PROBER 或留空：' + str(plan.get('targetKind')))
+    equipment = data.get('eqp') or []
+    cp_ids = {identifier(e['id']) for e in equipment if 'OVEN' not in identifier(e.get('type'))}
+    oven_ids = [identifier(e['id']) for e in equipment if 'OVEN' in identifier(e.get('type'))]
+    bake = data.get('bakeResources') or {}
+    if not oven_ids:
+        oven_ids = [identifier(value) for value in bake.get('ids',
+                    ['BAKE-%02d' % n for n in range(1, int(bake.get('machines') or 7) + 1)])]
+    direct = target in cp_ids or target in oven_ids
+    paired = sorted({identifier(e['id']) for e in equipment
+                     if identifier(e['id']) in cp_ids and target
+                     and identifier(e.get('proberId')) == target})
+    if not kind:
+        if direct and paired:
+            raise ValueError('PM 编号同时匹配 EQPID 和 proberID：%s；请填写 TargetKind=EQP 或 PROBER' % target)
+        kind = 'EQP' if direct else 'PROBER'
+    affected = [target] if kind == 'EQP' and direct else paired if kind == 'PROBER' else []
+    if not target or not affected:
+        raise ValueError('计划引用未知或不适用机台：%s；PM 可填写 EQPID 或 proberID，'
+                         '请核对有效 EQP 的对应关系及手工机台覆盖配置' % (target or '空'))
+    resources = []
+    for eqp in affected:
+        if eqp in oven_ids:
+            resources.extend(eqp + '-C%d' % n for n in range(1, int(bake.get('chambers') or 4) + 1))
+        else:
+            resources.append(eqp)
+    return {'targetKind': kind, 'affectedEqps': affected, 'resources': resources}
+
+
+def pm_events(data):
+    """Build calendar events, merging overlapping fixed tester/prober PM rows.
+
+    Flexible windows alone never imply one maintenance. Only explicit time
+    intervals on a related EQP/PROBER pair form a merge edge. Connected rows
+    retain all source IDs and block the union of their intervals and resources.
+    """
+    entries, intervals = [], {}
+    for index, plan in enumerate(data.get('pm') or []):
+        target = resolve_pm_target(data, plan)
+        source = {key: plan[key] for key in ('eqp', 'early', 'due', 'over', 'hours', 'start') if key in plan}
+        source.update(id='PM-%02d' % (index + 1), eqp=identifier(plan['eqp']), targetKind=target['targetKind'])
+        entries.append({**source, **target, 'sourceIds': [source['id']], 'sourcePlans': [source], 'merged': False})
+        if plan.get('start'):
+            start = parse_datetime(plan['start'])
+            end = start + timedelta(hours=plan['hours'])
+            if start < parse_datetime(plan['early']) or end > parse_datetime(plan['over']) + timedelta(days=1):
+                raise ValueError('PM 指定时间超出维护窗口：' + source['id'] + ' / ' + source['eqp'])
+            intervals[index] = (start, end)
+
+    parents = list(range(len(entries)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    active = []
+    for index in sorted(intervals, key=lambda i: (intervals[i][0], i)):
+        start, end = intervals[index]
+        active = [other for other in active if intervals[other][1] > start]
+        for other in active:
+            if (entries[index]['targetKind'] != entries[other]['targetKind']
+                    and set(entries[index]['resources']) & set(entries[other]['resources'])):
+                parents[root(index)] = root(other)
+        active.append(index)
+
+    groups = {}
+    for index in range(len(entries)):
+        groups.setdefault(root(index), []).append(index)
+    events = []
+    for indices in groups.values():
+        event = dict(entries[indices[0]])
+        if len(indices) > 1:
+            first = min(intervals[i][0] for i in indices)
+            last = max(intervals[i][1] for i in indices)
+            event.update(
+                targetKind='COMBINED', merged=True,
+                start=first.astimezone(CST).isoformat(), hours=(last - first).total_seconds() / 3600,
+                early=min((entries[i]['early'] for i in indices), key=parse_datetime),
+                due=min((entries[i]['due'] for i in indices), key=parse_datetime),
+                over=max((entries[i]['over'] for i in indices), key=parse_datetime),
+                affectedEqps=sorted({eqp for i in indices for eqp in entries[i]['affectedEqps']}),
+                resources=sorted({resource for i in indices for resource in entries[i]['resources']}),
+                sourceIds=[entries[i]['id'] for i in indices],
+                sourcePlans=[entries[i]['sourcePlans'][0] for i in indices])
+        events.append(event)
+    return [event for _, event in ordered_plans(events, 'pm')]
 
 
 def resolve_wip(data):
