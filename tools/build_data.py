@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build assets/data.js from the scheduling workbook, using Python stdlib only."""
 import zipfile, re, json, os, sys
+from collections import Counter
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
@@ -95,18 +96,33 @@ def read_workbook(path):
         return result
 
 
-def clean_rows(rows):
+def column_name(index):
+    """Zero-based column index to the Excel label shown to the user."""
+    name, value = '', index + 1
+    while value:
+        value, digit = divmod(value - 1, 26)
+        name = chr(65 + digit) + name
+    return name
+
+
+def clean_rows(rows, reject_duplicates=True):
     if not rows:
         return [], []
     header = [str(x).strip() for x in rows[0]]
-    names = [name for name in header if name]
-    if len(names) != len(set(names)):
-        raise ValueError('Excel 表头有重复列名，请使用唯一名称：' + '、'.join(names))
+    counts = Counter(name for name in header if name)
+    duplicates = {name for name, count in counts.items() if count > 1}
+    if duplicates and reject_duplicates:
+        details = ['%s（%s列）' % (name, '、'.join(column_name(i) for i, value in enumerate(header) if value == name))
+                   for name in counts if name in duplicates]
+        raise ValueError('Excel 表头有重复列名，请使用唯一名称：' + '；'.join(details))
     out = []
     for r in rows[1:]:
         if not any(str(x).strip() for x in r):
             continue
-        out.append({header[i]: (r[i] if i < len(r) else '') for i in range(len(header))})
+        # Keep all header positions for mapping checks, but never silently choose
+        # one of several same-name values. Unmapped duplicate columns are unused.
+        out.append({name: (r[i] if i < len(r) else '') for i, name in enumerate(header)
+                    if name and name not in duplicates})
     return header, out
 
 

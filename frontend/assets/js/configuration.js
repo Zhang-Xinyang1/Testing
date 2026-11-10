@@ -1,7 +1,7 @@
 /* Configuration is persisted separately from the read-only reference workbook. */
 (function () {
   'use strict';
-  var A = window.TSApp, esc = A.esc, busy = false;
+  var A = window.TSApp, esc = A.esc, busy = false, pendingUpload = null;
   var schemas = {
     eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
     borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number']],
@@ -45,9 +45,11 @@
       '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx" disabled><span class="config-hint">当前为内置算例静态模式，无法上传。请启动后端服务（<code>python3 run.py</code>）后访问 <code>http://127.0.0.1:8080</code>。</span></label>' +
       '<div class="note-card">当前页面未连接后端，仅展示内置算例；导入、保存和重新排产不可用。</div></div></div>';
     var c = A.state.config, d = A.state.data, bake = d.bakeResources || {machines:7, chambers:4};
+    var selectedPath = pendingUpload ? pendingUpload.path : c.dataSource.path;
+    var selectedName = pendingUpload ? pendingUpload.name : c.dataSource.displayName || selectedPath.split(/[\\/]/).pop();
     var borrow = d.borrow.map(function (b) { return Object.assign({}, b, {start:b.start || b.generatedAt || b.date + 'T08:00:00+08:00'}); });
     return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>保存后自动重排，不修改 Excel。</p></div></div><div class="card-body">' +
-      '<div class="config-grid">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(c.dataSource.displayName || c.dataSource.path.split(/[\\/]/).pop()) + '</span><span class="config-hint">选择新文件后点击下方“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复参考配置”。</span><input id="cfg-path" type="hidden" value="' + esc(c.dataSource.path) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
+      '<div class="config-grid">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复参考配置”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
       '<details class="config-details"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
@@ -65,8 +67,8 @@
   };
   function draft() {
     var src = Object.assign({}, A.state.config.dataSource, JSON.parse(A.$('#cfg-source').value)), scheduling = {};
-    src.path = A.$('#cfg-path').value.trim();
-    src.displayName = A.$('#cfg-file-status').textContent;
+    src.path = pendingUpload ? pendingUpload.path : A.$('#cfg-path').value.trim();
+    src.displayName = pendingUpload ? pendingUpload.name : A.$('#cfg-file-status').textContent;
     src.type = 'excel';
     src.month = A.$('#cfg-month').value;
     Object.keys(schemas).forEach(function (key) {
@@ -97,6 +99,7 @@
     var result = await A.SCHED.run(preview.data, options);
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
+    if (pendingUpload && body.config.dataSource.path === pendingUpload.path) pendingUpload = null;
     A.updateSourceCard();
     await A.runSchedule({input:preview.data, options:options, result:result});
   }
@@ -118,16 +121,17 @@
   document.addEventListener('change', async function (event) {
     if (event.target.id !== 'cfg-file' || busy) return;
     var file = event.target.files[0]; if (!file) return;
-    var status = A.$('#cfg-file-status');
     if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 20 * 1024 * 1024) { A.toast('请选择不超过 20 MB 的 .xlsx 文件'); event.target.value = ''; return; }
     setBusy(true);
     try {
       var base = window.APP_BASE || '/'; if (!base.endsWith('/')) base += '/';
       var res = await fetch(base + 'api/uploads', {method:'POST', headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'X-Filename':encodeURIComponent(file.name)}, body:file});
       var result = await res.json(); if (!res.ok) throw new Error(result.error || '上传失败');
-      A.$('#cfg-path').value = result.path;
-      status.textContent = result.name;
-      A.$('#cfg-result').textContent = '已上传 ' + result.name + '。点击保存生效；如需沿用新文件中的机台和计划，请选择“恢复参考配置”。';
+      pendingUpload = {path:result.path, name:result.name};
+      var pathInput = A.$('#cfg-path'), status = A.$('#cfg-file-status'), output = A.$('#cfg-result');
+      if (pathInput) pathInput.value = result.path;
+      if (status) status.textContent = result.name;
+      if (output) output.textContent = '已上传 ' + result.name + '。点击保存生效；如需沿用新文件中的机台和计划，请选择“恢复参考配置”。';
     } catch (err) { A.toast(err.message); event.target.value = ''; }
     finally { setBusy(false); }
   });

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from test_platforms import platform_case
 from build_case import write_workbook
-from build_data import read_workbook
+from build_data import clean_rows, read_workbook
 from diagnostics import inspect_run
 from platforms import normalize_platforms
 from scheduler import run
@@ -50,6 +50,59 @@ def write_export(path, sheets):
 
 
 class ImportCaseTests(unittest.TestCase):
+    def test_unused_duplicate_headers_and_extra_sheets_do_not_block_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'export.xlsx'
+            sheets = export_sheets()
+            sheets[0][1][0].extend(['Density', 'Density'])
+            for row in sheets[0][1][1:]:
+                row.extend(['left', 'right'])
+            sheets.append(('Unmapped reference', [['Tech', 'Tech'], ['old', 'other']]))
+            write_export(path, sheets)
+            cfg = load_config()
+            cfg['dataSource']['path'] = str(path)
+            data = build_payload(config=cfg)
+            self.assertEqual(sum(row['mps'] for row in data['mps']), 45)
+            self.assertEqual(len(data['lots']), 2)
+            self.assertIn('Unmapped reference', [s['name'] for s in data['sheetSummary']])
+            header, rows = clean_rows([['Used', 'Other', 'Other'], ['yes', 'left', 'right']], reject_duplicates=False)
+            self.assertEqual(header, ['Used', 'Other', 'Other'])
+            self.assertEqual(rows, [{'Used': 'yes'}])
+
+    def test_used_duplicate_header_error_names_source_sheet_row_and_columns(self):
+        for table, field in ((0, 'mPs'), (1, 'STATUS')):
+            with self.subTest(table=table), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'uploaded.xlsx'
+                sheets = export_sheets()
+                sheets[table][1][0].append(field)
+                for row in sheets[table][1][1:]:
+                    row.append('bad')
+                write_export(path, sheets)
+                cfg = load_config()
+                cfg['dataSource'].update(path=str(path), displayName='selected.xlsx')
+                with self.assertRaisesRegex(ValueError, '字段匹配不唯一') as error:
+                    build_payload(config=cfg)
+                message = str(error.exception)
+                self.assertIn('文件「selected.xlsx」', message)
+                self.assertIn(str(path), message)
+                self.assertIn('Sheet「%s」' % ('MPS' if table == 0 else 'EQP'), message)
+                self.assertIn('表头第 1 行', message)
+                self.assertIn('C列' if table == 0 else 'D列', message)
+                self.assertIn('D列' if table == 0 else 'G列', message)
+
+    def test_summary_honors_header_row_and_ignores_duplicate_title_cells(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'export.xlsx'
+            write_export(path, export_sheets())
+            workbook = [(name, [['Title', 'Title']] + rows) for name, rows in read_workbook(path)]
+            cfg = load_config()
+            cfg['dataSource']['headerRow'] = 2
+            with patch('server_core.read_workbook', return_value=workbook):
+                data = build_payload(config=cfg)
+            summary = next(s for s in data['sheetSummary'] if s['name'] == 'mPs')
+            self.assertEqual(summary['fields'], ['PLATFORM', 'pPn', 'mps'])
+            self.assertEqual(summary['rows'], 2)
+
     def test_actual_xlsx_handles_case_lists_blank_plans_and_localized_date(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'export.xlsx'

@@ -9,7 +9,7 @@ from input_rules import base_ppn, flow_product, identifier, ordered_plans, parse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
-from build_data import read_workbook, clean_rows, num  # noqa: E402
+from build_data import read_workbook, clean_rows, column_name, num  # noqa: E402
 
 DEFAULT_CONFIG = os.path.join(ROOT, 'config', 'config.json')
 EMPTY_OPTIONAL_SHEETS = {'pm', 'borrow', 'constraints', 'wip', 'weekly', 'params'}
@@ -31,9 +31,11 @@ def resolve_column(header, wanted):
     if not wanted:
         return None
     target = norm_key(wanted)
-    matches = [name for name in header if norm_key(name) == target]
+    positions = [i for i, name in enumerate(header) if norm_key(name) == target]
+    matches = [header[i] for i in positions]
     if len(matches) > 1:
-        raise ValueError('字段匹配不唯一：%s → %s；请统一表头。' % (wanted, '、'.join(matches)))
+        details = '、'.join('%s列（%s）' % (column_name(i), header[i]) for i in positions)
+        raise ValueError('字段匹配不唯一：%s → %s；请给实际使用的列设置唯一表头。' % (wanted, details))
     return matches[0] if matches else None
 
 
@@ -73,7 +75,7 @@ def read_source(path):
 
 def rows_for(sheets, sheet_name, header_row=1):
     def trimmed(rows):
-        return clean_rows(rows[max(0, int(header_row) - 1):])
+        return clean_rows(rows[max(0, int(header_row) - 1):], reject_duplicates=False)
 
     target = norm_key(sheet_name)
     matches = [(name, rows) for name, rows in sheets if norm_key(name) == target]
@@ -162,6 +164,17 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     sheet_headers = {}
 
+    def source_context(sheet):
+        label = src.get('displayName') or os.path.basename(source_path.replace('\\', '/'))
+        return '文件「%s」（读取：%s），Sheet「%s」，表头第 %s 行：' % (
+            label, source_path, sheet, src.get('headerRow', 1))
+
+    def mapped_in_sheet(header, wanted, sheet):
+        try:
+            return mapped_column(header, wanted)
+        except ValueError as error:
+            raise ValueError(source_context(sheet) + str(error)) from error
+
     def mapping_for(sheet):
         if sheet in fm:
             return fm[sheet]
@@ -178,8 +191,10 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         try:
             header, rows = rows_for(wb, name, src.get('headerRow', 1))
         except KeyError:
-            raise ValueError('已配置的 Sheet 不存在：%s → %s；请修正映射，'
+            raise ValueError(source_context(name) + '已配置的 Sheet 不存在：%s → %s；请修正映射，'
                              '不使用此表时删除对应 Sheet 设置。' % (key, name))
+        except ValueError as error:
+            raise ValueError(source_context(name) + str(error)) from error
         sheet_headers[name] = header
         if not any(header) and not rows and key in EMPTY_OPTIONAL_SHEETS:
             return header, rows
@@ -192,12 +207,12 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         }
         for logical in required.get(key, ()):
             column = mapping.get(logical)
-            if not mapped_column(header, column):
+            if not mapped_in_sheet(header, column, name):
                 if isinstance(column, (list, tuple)):
                     display = ' / '.join(map(str, column))
                 else:
                     display = column
-                raise ValueError('字段映射不存在：%s.%s → %s；实际表头：%s'
+                raise ValueError(source_context(name) + '字段映射不存在：%s.%s → %s；实际表头：%s'
                                  % (name, logical, display,
                                     '、'.join(map(str, header))))
         return header, rows
@@ -209,7 +224,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         header = sheet_headers.get(sheet)
         if header is None:
             return wanted if isinstance(wanted, str) else default
-        resolved = mapped_column(header, wanted)
+        resolved = mapped_in_sheet(header, wanted, sheet)
         if resolved is not None:
             return resolved
         return wanted if isinstance(wanted, str) else default
@@ -399,7 +414,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     summary = []
     for name, rows in wb:
-        header, cleaned = clean_rows(rows)
+        header, cleaned = clean_rows(rows[max(0, int(src.get('headerRow', 1)) - 1):], reject_duplicates=False)
         summary.append({'name': name, 'rows': len(cleaned), 'fields': header})
 
     meta = {
