@@ -58,7 +58,7 @@
     A.bindShell();
     var h = (location.hash || '').replace('#', '');
     if (A.TITLES[h]) A.state.view = h;
-    window.DataLoader.load().then(function (res) {
+    return window.DataLoader.load().then(function (res) {
       A.state.data = res.data;
       A.state.config = res.config;
       A.state.mode = res.mode;
@@ -77,22 +77,28 @@
         A.renderView();
         A.toast('静态模式不执行排产，请使用 Python 服务地址');
       } else {
-        A.runSchedule();
+        A.hideLoading();
+        A.updateRunChip();
+        if (res.error) A.navigate('inputs');
+        else A.renderView();
       }
-      if (res.error) A.toast('API 不可用，已使用内置 demo 数据：' + res.error);
+      if (res.error) A.toast((res.mode === 'server' ? '数据读取失败，可在输入与配置页修正：' : '已使用内置数据：') + res.error);
     }).catch(function (err) {
       console.error(err);
-      A.$('#loading').classList.remove('show');
-      A.$('#content').innerHTML = '<div class="error-box"><b>数据加载失败</b>\n' + A.esc(err && err.stack ? err.stack : err) + '</div>';
+      A.state.loadError = err.message;
+      A.hideLoading();
+      A.syncNav();
+      A.updateRunChip();
+      A.$('#view-' + A.state.view).innerHTML = '<div class="error-box"><b>服务连接失败</b>\n' + A.esc(err.message) + '\n请检查服务后刷新页面重试。</div>';
     });
   };
 
   A.updateSourceCard = function () {
-    var d = A.state.data, meta = d.meta || {};
+    var d = A.state.data || {mps:[], lots:[]}, meta = d.meta || {};
     var name = A.$('#source-name'), sub = A.$('#source-meta'), status = A.$('#source-status'), note = A.$('#source-note');
-    if (name) name.textContent = (meta.source || '内置算例').split(/[\\/]/).pop();
+    if (name) name.textContent = (meta.source || ((A.state.config || {}).dataSource || {}).displayName || ((A.state.config || {}).dataSource || {}).path || '未读取数据').split(/[\\/]/).pop();
     if (sub) sub.textContent = (meta.month || '') + ' · ' + A.num(d.mps.reduce(function(s,m){return s+m.mps;},0)) + ' wafer / ' + A.num(d.lots.length) + ' lots · ' + (A.state.mode === 'server' ? '服务端数据' : '内置数据');
-    if (status) status.textContent = A.state.mode === 'server' ? 'Excel 数据源已连接' : '本地内置数据';
+    if (status) status.textContent = A.state.loadError ? '数据读取失败，请修正配置' : A.state.mode === 'server' ? 'Excel 数据源已连接' : '本地内置数据';
     if (note) note.textContent = A.state.mode === 'server' ? '参考数据只读' : '内置算例';
   };
 
@@ -101,7 +107,7 @@
       var b = e.target.closest('[data-view]');
       if (b) A.navigate(b.getAttribute('data-view'));
     });
-    A.$('#btn-run').addEventListener('click', A.runSchedule);
+    A.$('#btn-run').addEventListener('click', A.reloadAndRun);
     A.$('#btn-import').addEventListener('click', A.openExcelImport);
     A.$('#btn-settings').addEventListener('click', function () { A.openSettings(); });
     A.$('#drawer-close').addEventListener('click', function () { A.closeDrawer(); });
@@ -152,6 +158,30 @@
       inputSignature(cached.input) === inputSignature(input) &&
       JSON.stringify(cached.options) === JSON.stringify(options));
   };
+  A.reloadAndRun = async function () {
+    if (A.state.mode !== 'server') { A.toast('请连接 Python 服务后排产'); return; }
+    var sequence = A.state.runSequence = (A.state.runSequence || 0) + 1;
+    A.state.result = null;
+    A.showLoading('正在读取已保存的数据', '读取完成后开始排产');
+    try {
+      var res = await window.DataLoader.load();
+      if (sequence !== A.state.runSequence) return;
+      if (res.mode !== 'server') throw new Error(res.error || '服务不可用');
+      A.state.data = res.data; A.state.config = res.config; A.state.loadError = res.error;
+      A.updateSourceCard();
+      if (res.error) throw new Error(res.error);
+      await A.runSchedule();
+    } catch (err) {
+      if (sequence !== A.state.runSequence) return;
+      A.state.loadError = err.message;
+      A.state.data = null;
+      A.updateSourceCard();
+      A.hideLoading(); A.updateRunChip();
+      A.toast('未排产：' + err.message);
+      if (A.state.config) A.navigate('inputs');
+      else A.renderView();
+    }
+  };
   A.runSchedule = async function (cached) {
     if (!A.state.data) return;
     if (A.state.mode !== 'server') {
@@ -178,6 +208,7 @@
         if (sequence !== A.state.runSequence) return;
         console.error(err);
         A.hideLoading();
+        A.updateRunChip();
         if (A.recordDiagnostics) await A.recordDiagnostics(null, err, snapshot);
         if (sequence !== A.state.runSequence) return;
         A.toast('排产失败：' + err.message);
@@ -197,13 +228,13 @@
     clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove('show'); }, 3200);
   };
   A.updateRunChip = function () {
-    if (!A.state.result) return;
+    if (!A.state.result) { A.$('#run-chip').textContent = A.state.loadError ? '数据待修正' : '尚未排产'; return; }
     var d = new Date(A.state.result.runAt);
     A.$('#run-chip').textContent = '上次排产 ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + ' · ' + Math.round(A.state.result.runMs) + ' ms';
   };
   A.renderView = function () {
     if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
-    if (A.state.view === 'inputs' && A.state.data && A.state.mode === 'server') { A.renderInputs(); return; }
+    if (A.state.view === 'inputs' && (A.state.data || A.state.config) && A.state.mode === 'server') { A.renderInputs(); return; }
     if (!A.state.result) {
       var el = A.$('#view-' + A.state.view);
       if (el && A.state.mode !== 'server') {
@@ -211,6 +242,7 @@
           '\n排产由 Python 后端执行。请运行 <code>python3 run.py</code>，' +
           '然后访问 <code>http://127.0.0.1:8080</code>。</div>';
       }
+      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“输入与配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p></div>';
       return;
     }
     if (A.state.view === 'mps') A.renderMps();

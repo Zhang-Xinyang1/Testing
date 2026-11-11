@@ -165,6 +165,7 @@
   }
 
   function exportCsv(kind) {
+    if (!A.state.result) { A.toast('尚无排产结果，请先排产再导出'); return; }
     var lines = [], filename = '';
     if (kind === 'mps') {
       var rows = A.mpsRows();

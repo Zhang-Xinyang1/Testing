@@ -11,9 +11,16 @@
   function localTime(value) {
     if (!value) return '';
     var ms = A.SCHED.parseDate(value);
-    return isFinite(ms) ? new Date(ms + 8 * A.HOUR).toISOString().slice(0, 16) : '';
+    return isFinite(ms) ? new Date(ms + 8 * A.HOUR).toISOString().slice(0, -1) : '';
   }
-  function iso(value) { return value ? value + ':00+08:00' : ''; }
+  function iso(value) { return value ? value + (value.length === 16 ? ':00' : '') + '+08:00' : ''; }
+  function configuredData() {
+    if (A.state.data) return A.state.data;
+    var c = A.state.config, s = c.scheduling || {};
+    return {meta:{month:c.dataSource.month}, eqp:s.eqp || [], pm:s.pm || [], borrow:s.borrow || [], wip:s.wip || [], bakeResources:s.bakeResources};
+  }
+  function manual(key) { return Object.prototype.hasOwnProperty.call(A.state.config.scheduling || {}, key); }
+  function markManual(key) { var el = A.$('#cfg-override-' + key); if (el) el.checked = true; }
   function input(id, label, value, type) {
     return '<label class="config-field">' + label + '<input class="input" id="cfg-' + id + '" type="' + (type || 'text') + '" value="' + esc(value == null ? '' : value) + '"></label>';
   }
@@ -21,38 +28,45 @@
     return '<details class="config-details"><summary>' + label + '</summary><textarea class="input config-json" id="cfg-' + key + '">' + esc(JSON.stringify(value, null, 2)) + '</textarea></details>';
   }
   function resources(bake, probers) {
-    var d = A.state.data, values = d.eqp.filter(function(m){return bake || !/OVEN/i.test(m.type);}).map(function(m){return m.id;});
+    var d = configuredData(), values = d.eqp.filter(function(m){return bake || !/OVEN/i.test(m.type);}).map(function(m){return m.id;});
     if (probers) d.eqp.forEach(function (m) { if (m.proberId && !/OVEN/i.test(m.type)) values.push(m.proberId); });
     return Array.from(new Set(values));
   }
   function rowHTML(key, row) {
-    return '<tr>' + schemas[key].map(function (col) {
+    return '<tr data-original="' + esc(JSON.stringify(row)) + '">' + schemas[key].map(function (col) {
       var field = col[0], type = col[2] || 'text', value = row[field] == null ? '' : row[field];
-      if (type === 'datetime-local') value = localTime(value);
+      if (type === 'datetime-local' || type === 'date') {
+        var ms = A.SCHED.parseDate(value);
+        if (value && !isFinite(ms)) type = 'text'; // Keep invalid input visible for repair.
+        else value = value ? (type === 'date' ? A.SCHED.dayKey(ms) : localTime(value)) : '';
+      }
       var attrs = ' data-field="' + field + '" aria-label="' + esc(col[1]) + '"';
       if (['status', 'machine', 'resource', 'maintenance', 'target-kind'].indexOf(type) >= 0) {
         var values = type === 'status' ? ['', 'RUN', 'LOST'] : type === 'target-kind' ? ['', 'EQP', 'PROBER'] : [''].concat(resources(type !== 'machine', type === 'maintenance'));
         if (values.indexOf(value) < 0) values.push(value);
         return '<td><select class="select"' + attrs + '>' + values.map(function (v) { return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(v || (type === 'target-kind' ? '自动识别' : '—')) + '</option>'; }).join('') + '</select></td>';
       }
-      return '<td><input class="input"' + attrs + ' type="' + type + '"' + (type === 'number' ? ' min="0.01" step="any"' : '') + ' value="' + esc(value) + '"></td>';
+      return '<td><input class="input"' + attrs + ' type="' + type + '"' + (type === 'number' ? ' min="0.01" step="any"' : type === 'datetime-local' ? ' step="any"' : '') + ' value="' + esc(value) + '"></td>';
     }).join('') + '<td><button class="btn ghost small" data-cfg-delete="' + key + '">删除</button></td></tr>';
   }
   function table(key, label, rows) {
-    return '<details class="config-details"><summary>' + label + ' · ' + rows.length + ' 条</summary><div class="table-scroll config-editor"><table class="data-table" id="cfg-table-' + key + '"><thead><tr>' + schemas[key].map(function (col) { return '<th>' + col[1] + '</th>'; }).join('') + '<th>操作</th></tr></thead><tbody>' + rows.map(function (row) { return rowHTML(key, row); }).join('') + '</tbody></table></div><button class="btn ghost small" data-cfg-new="' + key + '">增加一行</button></details>';
+    return '<details class="config-details"><summary>' + label + ' · ' + rows.length + ' 条 · ' + (manual(key) ? '手工配置' : 'Excel') + '</summary>' +
+      '<label><input type="checkbox" id="cfg-override-' + key + '"' + (manual(key) ? ' checked' : '') + '> 手工配置覆盖 Excel</label><p class="config-hint">编辑下表会自动勾选。取消勾选后，保存时重新读取 Excel；当前表格仍为保存前预览。</p>' +
+      '<div class="table-scroll config-editor"><table class="data-table" id="cfg-table-' + key + '"><thead><tr>' + schemas[key].map(function (col) { return '<th>' + col[1] + '</th>'; }).join('') + '<th>操作</th></tr></thead><tbody>' + rows.map(function (row) { return rowHTML(key, row); }).join('') + '</tbody></table></div><button class="btn ghost small" data-cfg-new="' + key + '">增加一行</button></details>';
   }
   A.configurationHTML = function () {
     if (A.state.mode !== 'server') return '<div class="card production-config"><div class="card-head"><div><h3>Excel 导入</h3><p>上传只读副本后保存并自动重排，不修改原文件。</p></div></div><div class="card-body">' +
       '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx" disabled><span class="config-hint">当前为内置算例静态模式，无法上传。请启动后端服务（<code>python3 run.py</code>）后访问 <code>http://127.0.0.1:8080</code>。</span></label>' +
       '<div class="note-card">当前页面未连接后端，仅展示内置算例；导入、保存和重新排产不可用。</div></div></div>';
-    var c = A.state.config, d = A.state.data, bake = d.bakeResources || {machines:7, chambers:4};
+    var c = A.state.config, d = configuredData(), bake = d.bakeResources || {machines:'', chambers:''};
     var selectedPath = pendingUpload ? pendingUpload.path : c.dataSource.path;
     var selectedName = pendingUpload ? pendingUpload.name : c.dataSource.displayName || selectedPath.split(/[\\/]/).pop();
-    var borrow = d.borrow.map(function (b) { return Object.assign({}, b, {start:b.start || b.generatedAt || b.date + 'T08:00:00+08:00'}); });
+    var borrow = d.borrow;
     return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>保存后自动重排，不修改 Excel。</p></div></div><div class="card-body">' +
       '<div class="config-grid">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复参考配置”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
       '<details class="config-details"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
+      '<p class="config-hint">BAKE 台数：EQP 中有 OVEN 时以设备行数为准；没有 OVEN 时使用上方配置台数。每台腔体数使用上方配置，请核对实际容量。</p>' +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
       (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
       table('eqp', '设备与 prober 对应关系', d.eqp) + '<p class="config-hint">PM 可填写 EQPID 或 proberID；prober 维护会在同一时段锁定所有对应 EQPID。同一对设备的指定时间重叠时合并维护，停机覆盖最早开始至最晚结束；没有指定时间或区间不重叠时分别执行。编号同时匹配两类对象时请选择对象类型。</p>' + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
@@ -62,22 +76,31 @@
       '<div class="section-title"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
       '<label class="config-field">设备／维护对象<select class="select" id="cfg-machine">' + resources(true, true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
-      '<label class="config-field">PM 对象类型<select class="select" id="cfg-target-kind"><option value="">自动识别</option value="EQP">EQP</option><option value="PROBER">PROBER</option></select></label>' +
+      '<label class="config-field">PM 对象类型<select class="select" id="cfg-target-kind"><option value="">自动识别</option><option value="EQP">EQP</option><option value="PROBER">PROBER</option></select></label>' +
       input('time', '借机日期', d.meta.month + '-01', 'date') + input('hours', '时长（小时）', 8, 'number') +
       input('early', 'PM 最早日期', d.meta.month + '-01', 'date') + input('due', 'PM 期望日期', d.meta.month + '-03', 'date') + input('over', 'PM 最迟完成日期', d.meta.month + '-05', 'date') + '</div>' +
       '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-recommend">试排并推荐</button><button class="btn primary" id="cfg-add">添加计划并保存</button></div><div id="cfg-result" class="note-card" role="status">推荐后点击添加保存。</div></div></div>';
   };
   function draft() {
-    var src = Object.assign({}, A.state.config.dataSource, JSON.parse(A.$('#cfg-source').value)), scheduling = {};
+    var src = Object.assign({}, A.state.config.dataSource, JSON.parse(A.$('#cfg-source').value));
+    var scheduling = Object.assign({}, A.state.config.scheduling || {});
     src.path = pendingUpload ? pendingUpload.path : A.$('#cfg-path').value.trim();
     src.displayName = pendingUpload ? pendingUpload.name : A.$('#cfg-file-status').textContent;
     src.type = 'excel';
     src.month = A.$('#cfg-month').value;
     Object.keys(schemas).forEach(function (key) {
+      var source = A.$('#cfg-override-' + key);
+      if (!(source ? source.checked : manual(key))) { delete scheduling[key]; return; }
       scheduling[key] = A.$$('#cfg-table-' + key + ' tbody tr').map(function (tr) {
-        var row = {};
-        A.$$('[data-field]', tr).forEach(function (el) { var v = el.value.trim(); row[el.dataset.field] = el.type === 'number' ? Number(v) : el.type === 'datetime-local' ? iso(v) : v; });
-        if (key === 'borrow') { row.date = row.date || (row.start || '').slice(0, 10); delete row.generatedAt; }
+        var row = JSON.parse((tr.dataset || {}).original || '{}');
+        A.$$('[data-field]', tr).forEach(function (el) {
+          var field = el.dataset.field, v = el.value.trim(), previous = row[field];
+          // Browsers normalize datetime-local strings; compare instants before replacing
+          // an unchanged source value (including seconds and sub-millisecond precision).
+          if (previous && v && el.type === 'datetime-local' && A.SCHED.parseDate(previous) === A.SCHED.parseDate(v)) return;
+          if (previous && v && el.type === 'date' && A.SCHED.dayKey(A.SCHED.parseDate(previous)) === v) return;
+          row[field] = el.type === 'number' ? Number(v) : el.type === 'datetime-local' ? iso(v) : v;
+        });
         return row;
       });
     });
@@ -101,6 +124,7 @@
     var result = await A.SCHED.run(preview.data, options);
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
+    A.state.loadError = null;
     if (pendingUpload && body.config.dataSource.path === pendingUpload.path) pendingUpload = null;
     A.updateSourceCard();
     await A.runSchedule({input:preview.data, options:options, result:result});
@@ -109,7 +133,7 @@
     var kind = A.$('#cfg-kind').value, time = A.$('#cfg-time').value, hours = Number(A.$('#cfg-hours').value);
     if (!Number.isFinite(hours) || hours <= 0) throw new Error('请输入正数时长');
     if (kind === 'borrow') {
-      if (!time || !A.state.data.eqp.some(function(m){return m.id===eqp && !/OVEN/i.test(m.type);})) throw new Error('借机请选择 CP 机台并填写开始时间');
+      if (!time || !configuredData().eqp.some(function(m){return m.id===eqp && !/OVEN/i.test(m.type);})) throw new Error('借机请选择 CP 机台并填写开始时间');
       if (hours<0.6 || hours>24) throw new Error('借机时数需为 0.6–24 小时');
       return {eqp:eqp, date:time.slice(0,10), hours:hours};
     }
@@ -121,6 +145,8 @@
     A.$$('.production-config button, .production-config input, .production-config select, .production-config textarea').forEach(function (el) { el.disabled = value; });
   }
   document.addEventListener('change', async function (event) {
+    var table = event.target.closest && event.target.closest('[id^="cfg-table-"]');
+    if (table && !busy) markManual(table.id.slice('cfg-table-'.length));
     if (event.target.id !== 'cfg-file' || busy) return;
     var file = event.target.files[0]; if (!file) return;
     if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 20 * 1024 * 1024) { A.toast('请选择不超过 20 MB 的 .xlsx 文件'); event.target.value = ''; return; }
@@ -140,8 +166,8 @@
   document.addEventListener('click', async function (event) {
     var add = event.target.closest('[data-cfg-new]'), del = event.target.closest('[data-cfg-delete]');
     if (busy) return;
-    if (add) { var key = add.dataset.cfgNew; A.$('#cfg-table-' + key + ' tbody').insertAdjacentHTML('beforeend', rowHTML(key, {})); return; }
-    if (del) { del.closest('tr').remove(); return; }
+    if (add) { var key = add.dataset.cfgNew; markManual(key); A.$('#cfg-table-' + key + ' tbody').insertAdjacentHTML('beforeend', rowHTML(key, {})); return; }
+    if (del) { markManual(del.dataset.cfgDelete); del.closest('tr').remove(); return; }
     var id = event.target.id;
     if (['cfg-save', 'cfg-add', 'cfg-excel', 'cfg-recommend', 'cfg-oracle-save'].indexOf(id) < 0) return;
     try {
@@ -154,16 +180,14 @@
         A.state.config.oracle = saved.oracle;
         A.$('#cfg-oracle-status').textContent = '配置已保存；接口预留，尚未连接数据库。';
       }
-      else if (id === 'cfg-excel') { cfg.scheduling = {}; await save(cfg); }
+      else if (id === 'cfg-excel') { Object.keys(schemas).forEach(function (key) { delete cfg.scheduling[key]; }); await save(cfg); }
       else if (id === 'cfg-save') await save(cfg);
       else {
         var preview = await request('api/preview', cfg), data = preview.data;
         var output = A.$('#cfg-result');
         if (id === 'cfg-add') {
           data[kind].push(proposal);
-          var test = await A.SCHED.run(data, A.state.options);
-
-          cfg.scheduling[kind].push(proposal);
+          cfg.scheduling[kind] = data[kind];
           await save(cfg);
         } else if (kind === 'pm') {
           data.pm.push(proposal);
@@ -173,8 +197,8 @@
         } else {
           data.borrow.push(proposal);
           var trial=await A.SCHED.run(data,A.state.options);
-          var request=trial.borrows.find(function(b){return b.req.eqp===proposal.eqp && b.req.date===proposal.date && b.req.hours===proposal.hours;});
-          output.textContent=request && request.status!=='cancel' ? '固定机台 '+request.eqp+'，安排时间：'+A.fmtDateTime(request.start)+' → '+A.fmtDateTime(request.end)+'。保存后生效。' : request && request.suggestion ? '当天无法执行，原机台建议：'+A.fmtDateTime(request.suggestion.start)+' → '+A.fmtDateTime(request.suggestion.end)+'。建议尚未执行。' : '原机台不可用，保留未执行计划，不自动换机。';
+          var borrowRequest=trial.borrows.find(function(b){return b.req.eqp===proposal.eqp && b.req.date===proposal.date && b.req.hours===proposal.hours;});
+          output.textContent=borrowRequest && borrowRequest.status!=='cancel' ? '固定机台 '+borrowRequest.eqp+'，安排时间：'+A.fmtDateTime(borrowRequest.start)+' → '+A.fmtDateTime(borrowRequest.end)+'。保存后生效。' : borrowRequest && borrowRequest.suggestion ? '当天无法执行，原机台建议：'+A.fmtDateTime(borrowRequest.suggestion.start)+' → '+A.fmtDateTime(borrowRequest.suggestion.end)+'。建议尚未执行。' : '原机台不可用，保留未执行计划，不自动换机。';
 
         }
       }

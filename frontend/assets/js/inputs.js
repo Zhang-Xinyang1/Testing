@@ -13,6 +13,10 @@
   }
 
   function renderInputs() {
+    if (!A.state.data) {
+      $('#view-inputs').innerHTML = '<div class="error-box"><b>数据读取失败</b>\n' + esc(A.state.loadError || '暂无有效数据') + '\n可重新导入 Excel、修正字段映射或手工配置，然后保存并排产。</div>' + A.configurationHTML();
+      return;
+    }
     var d = A.state.data, meta = d.meta || {};
     var sheets = sheetList();
     if (!sheets.some(function (s) { return s.name === A.state.inputs.sheet; }) && sheets.length) A.state.inputs.sheet = sheets[0].name;
@@ -108,7 +112,7 @@
     var wrap = $('#inputs-preview-wrap');
     if (wrap) wrap.innerHTML = inputsPreviewHTML();
   }
-function validationHTML() {
+  function validationHTML() {
     var d = A.state.data, r = A.state.result;
     var checks = [];
     var mpsSum = (d.mps || []).reduce(function (a, x) { return a + x.mps; }, 0);
@@ -116,18 +120,20 @@ function validationHTML() {
     checks.push([mpsSum === waferSum && d.lots.every(function(l){return Number.isInteger(l[3])&&l[3]>=1&&l[3]<=25;}), 'MPS 与 Lot wafer 合计一致：' + num(mpsSum) + ' / ' + num(waferSum) + ' wafer，拆为 ' + num(d.lots.length) + ' Lot（每 Lot 最多25片）']);
     checks.push([Object.keys(d.flows).length === (d.mps || []).length, '工艺覆盖：' + Object.keys(d.flows).length + ' 个 PROD / ' + (d.mps || []).length + ' 个 PPN']);
     var flowRows = Object.keys(d.flows).reduce(function (a, p) { return a + d.flows[p].length; }, 0);
-    checks.push([flowRows > 0, '工艺记录：' + flowRows + ' 行，展开 ' + num(r.metrics.cpOps) + ' 道 CP 工序']);
+    checks.push([flowRows > 0, '工艺记录：' + flowRows + ' 行' + (r ? '，展开 ' + num(r.metrics.cpOps) + ' 道 CP 工序' : '，尚无排产结果')]);
     var noCards = (d.recipes || []).filter(function (x) { return !x.cards.length; }).length;
     checks.push([noCards === 0, 'Recipe 与针卡：' + (d.recipes || []).length + ' 个 Recipe，' + noCards + ' 个无候选针卡']);
     var cards = {};
     (d.recipes || []).forEach(function (x) { x.cards.forEach(function (c) { cards[c] = 1; }); });
     checks.push([true, '针卡类型：' + Object.keys(cards).length + ' 种，实物数量充足，可跨机并行']);
-    checks.push([r.metrics.pmInWindow === r.metrics.pmCount, 'PM 窗口：' + r.metrics.pmInWindow + ' / ' + r.metrics.pmCount + ' 次在允许窗口内' + (r.metrics.pmMergedRows ? '（原始 ' + r.metrics.pmInputCount + ' 条，重叠维护已合并）' : '')]);
-    var maxBatchLots = Math.max.apply(null, r.batches.map(function (b) { return b.lots.length; }).concat([0]));
-    checks.push([maxBatchLots <= 4, 'BAKE 组批：最大 ' + maxBatchLots + ' lots（每腔上限 4 Lot，无 wafer 限制）']);
-    checks.push([r.metrics.borrowCancelRate <= 0.1, '借机取消率：' + A.pct(r.metrics.borrowCancelRate, 1) + '（阈值 10%）']);
-    checks.push([r.metrics.completedWafers >= mpsSum, '算法完成 / Excel MPS：' + num(r.metrics.completedWafers) + ' / ' + num(mpsSum) + ' wafer；在制另列 ' + num(r.metrics.wipLots || 0) + ' lots']);
-    return checks.map(function (c) {
+    if (r) {
+      checks.push([r.metrics.pmInWindow === r.metrics.pmCount, 'PM 窗口：' + r.metrics.pmInWindow + ' / ' + r.metrics.pmCount + ' 次在允许窗口内' + (r.metrics.pmMergedRows ? '（原始 ' + r.metrics.pmInputCount + ' 条，重叠维护已合并）' : '')]);
+      var maxBatchLots = Math.max.apply(null, r.batches.map(function (b) { return b.lots.length; }).concat([0]));
+      checks.push([maxBatchLots <= 4, 'BAKE 组批：最大 ' + maxBatchLots + ' lots（每腔上限 4 Lot，无 wafer 限制）']);
+      checks.push([r.metrics.borrowCancelRate <= 0.1, '借机取消率：' + A.pct(r.metrics.borrowCancelRate, 1) + '（阈值 10%）']);
+      checks.push([r.metrics.completedWafers >= mpsSum, '算法完成 / Excel MPS：' + num(r.metrics.completedWafers) + ' / ' + num(mpsSum) + ' wafer；在制另列 ' + num(r.metrics.wipLots || 0) + ' lots']);
+    }
+    return (!r ? '<p class="config-hint">尚无排产结果，以下仅核验输入数据。</p>' : '') + checks.map(function (c) {
       return '<div class="check-item"><span class="check-icon ' + (c[0] ? '' : 'warn') + '">' + (c[0] ? '✓' : '!') + '</span><span>' + esc(c[1]) + '</span></div>';
     }).join('');
   }

@@ -23,10 +23,15 @@
     if (location.protocol === 'http:' || location.protocol === 'https:') {
       try {
         var base = apiBase();
-        var data = await fetchJson(base + 'api/data');
-        if (!data || !data.mps || !data.lots) throw new Error('API returned empty data');
         var config = await fetchJson(base + 'api/config');
-        return { data: data, config: config, mode: 'server', error: null };
+        try {
+          var data = await fetchJson(base + 'api/data');
+          if (!data || !data.mps || !data.lots) throw new Error('API returned empty data');
+          return { data: data, config: config, mode: 'server', error: null };
+        } catch (dataError) {
+          // Keep import and configuration available when the saved workbook is invalid.
+          return { data: null, config: config, mode: 'server', error: dataError.message };
+        }
       } catch (e) {
         if (e.status === 404 && window.DEMO_DATA) {
           return { data: window.DEMO_DATA, config: null, mode: 'embedded', error: e.message };

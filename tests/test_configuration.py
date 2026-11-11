@@ -97,6 +97,41 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_schedule(d)
 
+    def test_configured_chambers_drive_solver_pm_and_wip_validation(self):
+        from scheduler import run
+        cfg = load_config()
+        oven = next(e['id'] for e in self.data['eqp'] if 'OVEN' in e['type'])
+        day = self.data['meta']['month'] + '-01'
+        cfg['scheduling'].update(bakeResources={'machines':99, 'chambers':2}, borrow=[], wip=[],
+                                 pm=[dict(eqp=oven, early=day, due=day, over=day,
+                                          start=day + ' 00:00', hours=2)])
+        data = build_payload(config=cfg)
+        self.assertEqual(data['bakeResources']['machines'], 7)
+        self.assertEqual(data['bakeResources']['chambers'], 2)
+        self.assertEqual(data['meta']['bakeSource'], 'eqp')
+        result = run(data, dict(algorithm='greedy', bakeWindowHours=0))
+        self.assertEqual(len(result['chambers']), 14)
+        self.assertEqual(result['pmRecords'][0]['resources'], [oven + '-C1', oven + '-C2'])
+        data['wip'] = [dict(lotId=data['lots'][0][0], eqp=oven, chamber=oven + '-C3',
+                            start=day + ' 03:00', end=day + ' 04:00')]
+        with self.assertRaisesRegex(ValueError, '所属腔体'):
+            validate_schedule(data)
+
+    def test_without_ovens_capacity_must_be_explicit_and_valid(self):
+        cfg = load_config()
+        cfg['scheduling'].update(eqp=[e for e in self.data['eqp'] if 'OVEN' not in e['type']],
+                                 pm=[], borrow=[], wip=[], bakeResources={'machines':2, 'chambers':3})
+        data = build_payload(config=cfg)
+        self.assertEqual(data['bakeResources'], {'machines':2, 'chambers':3})
+        self.assertEqual(data['meta']['bakeSource'], 'configured')
+        cfg['scheduling'].pop('bakeResources')
+        with self.assertRaisesRegex(ValueError, '明确填写 BAKE'):
+            build_payload(config=cfg)
+        for chambers in (0, 1.5, 101):
+            cfg['scheduling']['bakeResources'] = {'machines':2, 'chambers':chambers}
+            with self.subTest(chambers=chambers), self.assertRaisesRegex(ValueError, '1 至 100'):
+                build_payload(config=cfg)
+
     def test_api_preview_save_reload_and_failure_are_atomic(self):
         workbook = ROOT / 'data/Testing调度算例_新版.xlsx'
         before = hashlib.sha256(workbook.read_bytes()).hexdigest()
@@ -125,6 +160,7 @@ class ConfigurationTests(unittest.TestCase):
                 original = config.read_bytes()
                 preview = post('/api/preview', update)
                 self.assertEqual(preview['data']['bakeResources']['machines'], 7)
+                self.assertEqual(preview['data']['bakeResources']['chambers'], 2)
                 self.assertEqual(config.read_bytes(), original)
                 upload = urllib.request.Request(base + '/api/uploads', workbook.read_bytes(),
                     {'Content-Type': 'application/octet-stream', 'X-Filename': 'reference.xlsx'})

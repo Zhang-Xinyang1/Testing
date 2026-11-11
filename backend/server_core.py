@@ -460,7 +460,15 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     payload['wip'] = overrides.get('wip', wip)
     payload = normalize_platforms(payload)
     ovens = [e for e in payload['eqp'] if 'OVEN' in e['type'].upper()]
-    payload['bakeResources'] = {'machines': len(ovens), 'chambers': 4, 'ids': [e['id'] for e in ovens]} if ovens else overrides.get('bakeResources', {'machines': 7, 'chambers': 4})
+    bake = overrides.get('bakeResources', {})
+    if ovens:
+        payload['bakeResources'] = {'machines': len(ovens), 'chambers': bake.get('chambers', 4),
+                                    'ids': [e['id'] for e in ovens]}
+    else:
+        if not bake:
+            raise ValueError('EQP 中没有 OVEN，请在生产配置中明确填写 BAKE 台数和每台腔体数')
+        payload['bakeResources'] = bake
+    meta['bakeSource'] = 'eqp' if ovens else 'configured'
     payload['schemaVersion'] = 'confirmed-2026-11-06'
     payload = validate_schedule(payload)
     payload['planIssues'] = calendar_issues(payload)

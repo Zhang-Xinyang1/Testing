@@ -38,13 +38,19 @@ python3 run.py
 
 规则 PPT 与重跑结果在 `output/`；旧算例与旧 PPT 已删除。
 
-1. 打开“数据配置 → 生产配置 → Excel 导入”，选择 `.xlsx` 上传只读副本；静态打开页面时该入口不可用，需通过后端地址访问。
-2. 按需调整 Sheet/字段映射、机台、PM、借机、在制占用。
-3. 点击保存并排产。采用新文件原有资源时用“恢复参考配置”，该操作会清空手工覆盖，含在制快照。
+打开或刷新页面只读取当前保存的数据与配置，不自动排产，也不恢复上一次计算结果。点击“重新排产”会重新读取服务器已保存的数据，再计算一次；表单中的未保存修改须通过“保存并排产”提交。
+
+1. 打开“输入与配置 → 生产配置 → Excel 导入”，选择 `.xlsx` 上传只读副本；静态打开页面时该入口不可用，需通过后端地址访问。
+2. 按需调整 Sheet/字段映射、机台、PM、借机、在制占用。四张编辑表分别显示来源；编辑会自动勾选“手工配置覆盖 Excel”。仅改月份或其他设置，不会把未编辑的 Excel 表转成手工覆盖。
+3. 点击保存并排产。采用新文件的全部设备与计划时用“恢复参考配置”：清除设备、PM、借机、在制的手工覆盖，保留 BAKE 容量及其他排产设置。也可单独取消某张表的覆盖选项后保存。上传本身不清除已有手工覆盖。
 4. 查看 MPS 和甘特图，或导出 CSV。
 5. 排产诊断页查看问题编号、内网明细和运行对比；诊断不提供导出或外传。
 
 Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只配置环境变量名称。
+
+数据读取或排产失败后，“输入与配置”仍可用于重新上传、修改映射和修正配置。PM、借机及在制表支持与后端一致的日期格式；日期控件按北京时间展示，未修改的原始时间（含秒）在保存时保留。PM 指定时间重叠合并的业务规则不变。
+
+BAKE 台数在 EQP 中有 OVEN 时取实际设备行数，每台腔体数采用生产配置中的值；没有 OVEN 时必须提供 BAKE 容量配置，不再隐式补出 7 台。当前腔体数为所有烤箱统一值，尚不支持每台烤箱分别设置。
 
 ## 技术文档
 
@@ -63,6 +69,7 @@ Oracle 配置入口和适配器已预留，但尚未连接数据库。密码只�
 python3 deploy.py check
 python3 tools/check_fields.py
 python3 -m unittest discover -s tests -v
+node --test tests/frontend_state.test.js
 python3 -m py_compile backend/server.py backend/server_core.py backend/data_sources.py backend/diagnostics.py backend/scheduler.py deployment/manage.py
 python3 tools/verify_metrics.py
 python3 tools/benchmark_scheduler.py
