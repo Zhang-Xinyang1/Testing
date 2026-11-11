@@ -4,6 +4,126 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
+test('all obsolete CP adjustments can be cleared together and failed removal retains them', async () => {
+  const env = environment(), app = env.app, listeners = {};
+  const original = [{lotKey:'LOT-000001',opIndex:0,eqp:'M1'}, {lotKey:'LOT-000002',opIndex:0,eqp:'M1'}];
+  app.state.config = {scheduling:{taskOverrides:original}};
+  app.$ = () => null; app.closeDrawer = () => {};
+  const errors = []; app.showWorkflowError = error => errors.push(error.message);
+  env.context.document = {addEventListener(type, callback) {listeners[type] = callback;}};
+  vm.runInContext(env.read('adjustments.js'), env.context);
+  assert.match(app.taskOverridesHTML(), /解除全部并排产/);
+  const event = {target:{id:'task-remove-all', closest:()=>null}};
+  app.commitTaskOverrides = async items => {
+    assert.equal(items.length, 0);
+    throw new Error('试排失败');
+  };
+  await listeners.click(event);
+  assert.equal(app.state.config.scheduling.taskOverrides.length, 2);
+  assert.equal(errors[0], '试排失败');
+  app.commitTaskOverrides = async items => { app.state.config.scheduling.taskOverrides = items; };
+  await listeners.click(event);
+  assert.equal(app.state.config.scheduling.taskOverrides.length, 0);
+});
+
+test('save-only validates and commits without invoking the scheduling engine', async () => {
+  const env = environment(), app = env.app, listeners = {};
+  const nodes = {
+    '#cfg-path':{value:'old.xlsx'}, '#cfg-file-status':{textContent:'old.xlsx'},
+    '#cfg-source':{value:'{"sheetMap":{},"headerRow":1}'}, '#cfg-fields':{value:'{}'},
+    '#cfg-month':{value:'2026-09'}, '#cfg-bake-machines':{value:'1'}, '#cfg-bake-chambers':{value:'4'},
+    '#cfg-kind':{value:'borrow'}, '#cfg-machine':{value:''}, '#cfg-result':{}
+  };
+  app.$ = key => nodes[key]; app.$$ = () => [];
+  app.state.config = {dataSource:{path:'old.xlsx'}, fieldMap:{}, scheduling:{}};
+  app.state.data = {meta:{month:'2026-09'}, eqp:[], pm:[], borrow:[], wip:[]};
+  app.state.result = {old:true};
+  app.renderInputs = () => {}; app.updateSourceCard = () => {};
+  env.context.document = {addEventListener(type, callback) {listeners[type] = callback;}};
+  const requests = [];
+  env.context.fetch = async (url, request) => {
+    requests.push(url);
+    return {ok:true, json:async()=>({data:app.state.data, config:{...app.state.config, ...JSON.parse(request.body)}})};
+  };
+  vm.runInContext(env.read('configuration.js'), env.context);
+  await listeners.click({target:{id:'cfg-save-only', closest:()=>null}});
+  assert.deepEqual(requests, ['/api/preview', '/api/config']);
+  assert.equal(env.pending.length, 0);
+  assert.equal(app.state.result, null);
+  assert.equal(app.hasConfigurationChanges(), false);
+  requests.length = 0;
+  await listeners.click({target:{id:'cfg-validate', closest:()=>null}});
+  assert.deepEqual(requests, ['/api/preview']);
+  assert.match(nodes['#cfg-result'].textContent, /尚未保存或排产/);
+});
+
+test('historical views restore live input and cannot overwrite pending configuration drafts', async () => {
+  const env = environment(), app = env.app;
+  const currentInput = app.state.data, currentOptions = app.state.options;
+  app.state.result = {current:true};
+  app.$ = () => null; app.updateSourceCard = () => {}; app.navigate = view => { app.state.view = view; };
+  env.context.fetch = async () => ({ok:true, json:async()=>({
+    input:{meta:{month:'2026-01'}, lots:[]}, result:{start:1, runAt:'2026-01-01', historical:true},
+    options:{algorithm:'greedy'}, summary:{time:'2026-01-01T00:00:00+08:00'}
+  })});
+  vm.runInContext(env.read('history.js'), env.context);
+  app.hasConfigurationChanges = () => true;
+  await app.openHistoricalSchedule('test');
+  assert.equal(app.state.data, currentInput);
+  app.hasConfigurationChanges = () => false;
+  await app.openHistoricalSchedule('test');
+  assert.equal(app.state.result.historical, true);
+  assert.equal(app.state.historyId, 'test');
+  app.leaveHistoricalView();
+  assert.equal(app.state.data, currentInput);
+  assert.equal(app.state.options, currentOptions);
+  assert.equal(app.state.result.current, true);
+  assert.equal(app.state.historyId, null);
+});
+
+test('history comparison distinguishes an absent product from zero production', () => {
+  const env = environment();
+  vm.runInContext(env.read('history.js'), env.context);
+  const comparisons = env.app.compareScheduleSnapshots(
+    {result:{productStats:[{ppn:'P',completed:0}]}},
+    {result:{productStats:[{ppn:'Q',completed:10}]}});
+  assert.equal(comparisons[0].left.completed, 0);
+  assert.equal(comparisons[0].right, null);
+  assert.equal(comparisons[1].left, null);
+});
+
+test('ordinary mapping edits preserve alternative headers and update renamed sheets without leftover partial names', () => {
+  const env = environment(), listeners = {};
+  const source = {value:'{"sheetMap":{"mps":"MPS"},"headerRow":1}'};
+  const field = {value:'{"MPS":{"ppn":["PPN","PROD"],"mps":"MPS"}}'};
+  env.app.$ = key => ({'#cfg-source':source, '#cfg-fields':field})[key];
+  env.app.markConfigurationDirty = () => {};
+  env.context.document = {addEventListener(type, callback) {listeners[type] = callback;}};
+  vm.runInContext(env.read('workflow.js'), env.context);
+  listeners.input({target:{dataset:{mapRole:'mps',mapOriginal:'MPS'}, value:'New'}});
+  listeners.input({target:{dataset:{mapRole:'mps',mapOriginal:'MPS'}, value:'New MPS'}});
+  let mapping = JSON.parse(field.value);
+  assert.deepEqual(Object.keys(mapping), ['New MPS']);
+  assert.deepEqual(mapping['New MPS'].ppn, ['PPN','PROD']);
+  listeners.input({target:{dataset:{mapField:'mps',mapFieldRole:'mps'}, value:'Quantity\nMPS'}});
+  mapping = JSON.parse(field.value);
+  assert.deepEqual(mapping['New MPS'].mps, ['Quantity','MPS']);
+  assert.equal(JSON.parse(source.value).sheetMap.mps, 'New MPS');
+});
+
+test('a failed history write leaves the successful schedule usable and reports the storage failure', async () => {
+  const env = environment(), errors = [];
+  env.context.fetch = async () => ({ok:false, json:async()=>({error:'disk full'})});
+  env.app.showWorkflowError = error => errors.push(error.message);
+  vm.runInContext(env.read('history.js'), env.context);
+  const output = {metrics:{completedWafers:1}};
+  env.app.state.result = output;
+  await env.app.saveScheduleHistory(output, {input:env.app.state.data, options:{}});
+  assert.equal(env.app.state.result, output);
+  assert.match(errors[0], /disk full/);
+});
+
+
 function environment() {
   const pending = [], records = [], messages = [];
   const window = { addEventListener() {}, TestingScheduler: {run(input, options) {

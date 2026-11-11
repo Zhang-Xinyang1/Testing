@@ -26,7 +26,9 @@
     if (A.captureConfigurationDraft) A.captureConfigurationDraft();
     if (!A.state.data) {
       $('#view-inputs').innerHTML = '<div class="error-box"><b>数据读取失败</b>\n' + esc(A.state.loadError || '暂无有效数据') + '\n可重新导入 Excel、修正字段映射或手工配置，然后保存并排产。</div>' + A.configurationHTML();
-      if (A.restoreConfigurationDraft) A.restoreConfigurationDraft();
+      if (A.setupConfigurationWorkflow) A.setupConfigurationWorkflow();
+    if (A.restoreConfigurationDraft) A.restoreConfigurationDraft();
+    if (A.refreshMappingControls) A.refreshMappingControls();
       return;
     }
     var d = A.state.data, meta = d.meta || {};
@@ -51,7 +53,9 @@
     html += '<details class="config-details"><summary>输入核验</summary><div class="check-list">' + validationHTML() + '</div></details>';
     if (A.pmTraceHTML) html += A.pmTraceHTML();
     $('#view-inputs').innerHTML = html;
+    if (A.setupConfigurationWorkflow) A.setupConfigurationWorkflow();
     if (A.restoreConfigurationDraft) A.restoreConfigurationDraft();
+    if (A.refreshMappingControls) A.refreshMappingControls();
   }
 
   function mappedFields(sheetName, defaultFields, logicalFields) {

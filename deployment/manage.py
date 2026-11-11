@@ -22,7 +22,8 @@ PIDFILE = STATE / 'process.json'
 LOG = STATE / 'server.log'
 SERVER = BACKEND / 'server.py'
 REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py',
-                    'scheduler.py', 'optimizer.py', 'platforms.py', 'input_rules.py')
+                    'scheduler.py', 'optimizer.py', 'platforms.py', 'input_rules.py',
+                    'input_errors.py', 'schedule_history.py', 'task_overrides.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',
@@ -31,6 +32,9 @@ REQUIRED_FRONTEND = (
     'assets/data-loader.js',
     'assets/schedule-client.js',
     'assets/js/core.js',
+    'assets/js/workflow.js',
+    'assets/js/history.js',
+    'assets/js/adjustments.js',
     'assets/js/diagnostics.js',
     'assets/js/mps.js',
     'assets/js/gantt.js',
@@ -46,6 +50,9 @@ FRONTEND_MARKERS = (
     'id="btn-import"',
     'assets/schedule-client.js',
     'assets/js/core.js',
+    'assets/js/workflow.js',
+    'assets/js/history.js',
+    'assets/js/adjustments.js',
     'assets/js/inputs.js',
     'assets/js/configuration.js',
     'assets/js/maintenance.js',

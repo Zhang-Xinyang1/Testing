@@ -14,6 +14,23 @@
   --teal: #108c72;
   --shadow: 0 3px 16px rgba(15, 48, 60, .035);
 }
+[hidden] { display: none !important; }
+.config-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+.config-tabs .active { background: var(--navy); color: white; border-color: var(--navy); }
+.config-panel { min-height: 160px; }
+.config-savebar { position: sticky; bottom: 0; z-index: 12; padding: 14px 0 2px; border-top: 1px solid var(--line); background: #fff; }
+.config-savebar .config-actions { flex-wrap: wrap; }
+.config-savebar #cfg-result { max-height: 120px; overflow: auto; }
+.mapping-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 14px; }
+.mapping-value { min-height: 65px; padding: 8px; resize: vertical; }
+.workflow-error { padding: 18px; margin-bottom: 20px; border: 1px solid #e7b4a7; border-radius: 10px; background: #fff6f2; overflow-wrap: anywhere; }
+.workflow-error > p { white-space: pre-wrap; }
+.workflow-error .row { justify-content: space-between; }
+.field-attention { outline: 2px solid #ba6245; outline-offset: -2px; }
+.snapshot-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+.snapshot-banner button { margin-left: auto; }
+.empty-state .source-actions { justify-content: center; margin-top: 20px; }
+.drawer-body .config-field { margin-bottom: 16px; }
 body {
   background: radial-gradient(ellipse at 95% 0%, #e4efec 0, transparent 48%),
     linear-gradient(90deg, rgba(21, 63, 72, .025) 1px, transparent 1px),

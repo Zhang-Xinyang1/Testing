@@ -249,6 +249,8 @@ def _dispatch_key(lot, now, policy, month_ms):
 
 
 def simulate(data, options, policy=None):
+    from task_overrides import TaskConstraintError
+    adjustments = {(p['lotKey'], p['opIndex']): p for p in data.get('taskOverrides') or []}
     start = parse_date(data['meta']['start'])
     month_end = start + data['meta']['days'] * DAY
     ctx = {
@@ -390,8 +392,28 @@ def simulate(data, options, policy=None):
                                         'end': slot + duration}
         ctx['borrows'].append(record)
 
+    # Reserve fixed CP processing intervals before dispatch. Up to five minutes
+    # beforehand is held for a possible card change; the actual setup is still
+    # calculated from the preceding task. Other tasks cannot steal this window.
+    fixed_holds = {}
+    for key, item in adjustments.items():
+        if not item.get('fixedStart'):
+            continue
+        row = data['lots'][int(key[0].split('-')[-1]) - 1]
+        op = data['flows'][row[1]][key[1]]
+        first = parse_date(item['fixedStart'])
+        span = [max(start, parse_date(item['reserveStart']) if item.get('reserveStart') else first - 5 * MIN),
+                first + op[2] * MIN * row[3]]
+        machine = ctx['machineMap'][item['eqp']]
+        existing = machine['pm'] + machine['reserved'] + [s for _, s in fixed_holds.get(item['eqp'], [])]
+        if any(span[0] < b and a < span[1] for a, b in existing):
+            raise TaskConstraintError('固定工序与 PM、借机、在制或其他固定工序冲突：' + row[0],
+                                      {'table': 'taskOverrides'})
+        fixed_holds.setdefault(item['eqp'], []).append((key, span))
     for resource in ctx['machines'] + ctx['chambers']:
         resource['_blocks'] = sorted(resource['pm'] + resource['reserved'])
+        resource['_baseBlocks'] = resource['_blocks'][:]
+        resource['_blocks'] = sorted(resource['_blocks'] + [s for _, s in fixed_holds.get(resource['id'], [])])
     excluded = {w['lotKey'] for w in ctx['wip']}
     order = {}
     events = Heap()
@@ -537,18 +559,22 @@ def simulate(data, options, policy=None):
                 last_wip = max(released, key=lambda w: parse_date(w['end']))
                 machine['card'] = last_wip.get('card') or machine['initialCard']
                 machine['cardUpdatedAt'] = parse_date(last_wip['end'])
-            if policy is not None:
+            if policy is not None and not adjustments:
                 available_at = earliest_slot(machine, now, 1)
                 if available_at > now:
                     next_time = min(next_time, available_at)
                     continue
             slot_cache = {}
             best, best_card, best_setup = None, None, 0
-            pending = candidates if candidates is not None else [
-                queue[0] for queue in cp_queues.values() if queue]
+            pending = candidates if candidates is not None else ([
+                lot for queue in cp_queues.values() for lot in queue] if adjustments else [
+                queue[0] for queue in cp_queues.values() if queue])
             for lot in pending:
                 op = lot['ops'][lot['index']]
-                if policy is None and lot.get('preferredType') and machine['type'] != lot['preferredType']:
+                adjustment = adjustments.get((lot['key'], lot['index']))
+                if adjustment and adjustment['eqp'] != machine['id']:
+                    continue
+                if policy is None and not adjustment and lot.get('preferredType') and machine['type'] != lot['preferredType']:
                     continue
                 if machine['type'] not in lot['allowedTypes'] or (
                         machine['id'] + '|' + str(op[1])) in forbidden:
@@ -557,13 +583,32 @@ def simulate(data, options, policy=None):
                 if not cards:
                     continue
                 card = machine['card'] if machine['card'] in cards else cards[0]
+                if adjustment and adjustment.get('fixedStart'):
+                    card = adjustment['card']
                 setup = 0 if card == machine['card'] else 5 * MIN
                 # CP.TIME is minutes per wafer; machine time scales with lot wafers.
                 process_ms = op[2] * MIN * lot['wafer']
                 duration = process_ms + setup
-                if duration not in slot_cache:
-                    slot_cache[duration] = earliest_slot(machine, now, duration)
-                slot = slot_cache[duration]
+                if adjustment and adjustment.get('fixedStart'):
+                    fixed = parse_date(adjustment['fixedStart'])
+                    requested = fixed - setup
+                    if requested < now:
+                        raise TaskConstraintError('固定工序无法按时开始，前序工艺或换卡尚未就绪：' + lot['id'] + ' / ' + op[0],
+                                                  {'table': 'taskOverrides'})
+                    if requested > now:
+                        next_time = min(next_time, requested)
+                        continue
+                    other_holds = [s for k, s in fixed_holds.get(machine['id'], [])
+                                   if k != (lot['key'], lot['index'])]
+                    slot = gap(machine['_baseBlocks'] + other_holds, max(now, machine['free']), duration)
+                    if slot != now:
+                        raise TaskConstraintError('固定工序机台占用冲突：' + lot['id'], {'table': 'taskOverrides'})
+                else:
+                    not_before = max(now, parse_date(adjustment['earliestStart'])) if adjustment and adjustment.get('earliestStart') else now
+                    cache_key = (duration, not_before)
+                    if cache_key not in slot_cache:
+                        slot_cache[cache_key] = earliest_slot(machine, not_before, duration)
+                    slot = slot_cache[cache_key]
                 if slot > now:
                     next_time = min(next_time, slot)
                     continue
@@ -581,7 +626,7 @@ def simulate(data, options, policy=None):
                 queue.remove(lot)
                 candidates.remove(lot)
             else:
-                queue.pop(0)
+                queue.remove(lot)
             process_ms = op[2] * MIN * lot['wafer']
             end = now + best_setup + process_ms
             task = {
@@ -688,6 +733,14 @@ def simulate(data, options, policy=None):
             lot['unscheduledReason'] = '无可用腔体或资源'
         if not math.isfinite(lot['complete']):
             lot['status'] = 'unscheduled'
+
+    tasks = {(task['lotKey'], task['opIndex']): task
+             for machine in ctx['machines'] for task in machine['tasks']}
+    for key, item in adjustments.items():
+        task = tasks.get(key)
+        if not task or task['machine'] != item['eqp'] or (
+                item.get('fixedStart') and task['start'] != parse_date(item['fixedStart'])):
+            raise TaskConstraintError('手工工序未能执行：' + item.get('lotId', key[0]), {'table': 'taskOverrides'})
 
     ctx['cpOps'] = sum(len(machine['tasks']) for machine in ctx['machines'])
     ctx['horizonEnd'] = max(month_end, now)
@@ -1042,9 +1095,11 @@ def make_json_safe(value):
 
 def run(data, options=None):
     from optimizer import search_schedules
+    from task_overrides import validate_overrides
 
     data = normalize_platforms(data)
     data['wip'] = resolve_wip(data)
+    data['taskOverrides'] = validate_overrides(data)
     options = dict(options or {})
     options['strategy'] = 'attainment'
     options['setupMinutes'] = 5
@@ -1103,6 +1158,7 @@ def compact_result(result):
     for source in compact.get('chambers') or []:
         chamber = dict(source)
         chamber.pop('_blocks', None)
+        chamber.pop('_baseBlocks', None)
         chamber.pop('daily', None)
         chamber.pop('reserved', None)
         chamber['batches'] = [batch_map[batch['id']]
@@ -1114,6 +1170,7 @@ def compact_result(result):
     for source in compact.get('machines') or []:
         machine = dict(source)
         machine.pop('_blocks', None)
+        machine.pop('_baseBlocks', None)
         machine.pop('cardUpdatedAt', None)
         machine.pop('daily', None)
         machine.pop('intervals', None)

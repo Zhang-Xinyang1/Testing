@@ -18,9 +18,10 @@
     database: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>'
   };
   A.TITLES = {
-    mps: ['MPS 达成', 'Excel MPS 与算法完成量'],
+    mps: ['MPS 结果', 'Excel MPS 与算法预测完成量'],
     gantt: ['排产甘特', '机台与腔体时间轴'],
-    inputs: ['输入与配置', '数据、机台与计划']
+    inputs: ['数据配置', '导入数据 → 核对资源与计划 → 保存 → 排产'],
+    history: ['方案历史', '打开已保存结果 · 比较两次方案']
   };
   A.SHEET_ORDER = ['MPS', 'EQP', '针卡', '测试flow&工时', '借机计划', 'PM计划', '约束条件'];
 
@@ -65,6 +66,7 @@
       A.state.config = res.config;
       A.state.mode = res.mode;
       A.state.loadError = res.error;
+      if (res.error && A.showWorkflowError) A.showWorkflowError({message:res.error, issues:res.issues || []});
       A.updateSourceCard();
       A.syncNav();
       if (res.mode !== 'server' && window.DEMO_RESULT) {
@@ -116,11 +118,10 @@
     A.$('#drawer-scrim').addEventListener('click', function () { A.closeDrawer(); });
     A.$('#modal-close').addEventListener('click', function () { A.closeModal(); });
     A.$('#modal-cancel').addEventListener('click', function () { A.closeModal(); });
-    A.$('#modal-apply').addEventListener('click', function () { A.applySettings(); });
     A.$('#modal').addEventListener('click', function (e) { if (e.target.id === 'modal') A.closeModal(); });
     window.addEventListener('hashchange', function () {
       var v = (location.hash || '').replace('#', '');
-      if (A.TITLES[v] && v !== A.state.view) { A.state.view = v; A.syncNav(); A.renderView(); }
+      if (A.TITLES[v] && v !== A.state.view) { if (v === 'inputs' && A.leaveHistoricalView) A.leaveHistoricalView(); A.state.view = v; A.syncNav(); A.renderView(); }
     });
   };
 
@@ -132,6 +133,7 @@
   };
 
   A.navigate = function (view) {
+    if (view === 'inputs' && A.leaveHistoricalView) A.leaveHistoricalView();
     if (!A.TITLES[view]) return;
     A.state.view = view;
     history.replaceState(null, '', '#' + view);
@@ -147,6 +149,7 @@
       return;
     }
     A.navigate('inputs');
+    if (A.selectConfigSection) A.selectConfigSection('source');
     var input = A.$('#cfg-file');
     if (input) input.click();
   };
@@ -162,6 +165,8 @@
       JSON.stringify(cached.options) === JSON.stringify(options));
   };
   A.reloadAndRun = async function () {
+    if (A.leaveHistoricalView) A.leaveHistoricalView();
+    if (A.clearWorkflowErrors) A.clearWorkflowErrors();
     if (A.state.mode !== 'server') { A.toast('请连接 Python 服务后排产'); return; }
     if (A.configurationBusy && A.configurationBusy()) { A.toast('正在处理配置，请稍候'); return; }
     if (A.hasConfigurationChanges && A.hasConfigurationChanges()) {
@@ -178,7 +183,7 @@
       if (res.mode !== 'server') throw new Error(res.error || '服务不可用');
       A.state.data = res.data; A.state.config = res.config; A.state.loadError = res.error;
       A.updateSourceCard();
-      if (res.error) throw new Error(res.error);
+      if (res.error) { var readError = new Error(res.error); readError.issues = res.issues || []; throw readError; }
       await A.runSchedule();
     } catch (err) {
       if (sequence !== A.state.runSequence) return;
@@ -187,6 +192,7 @@
       A.updateSourceCard();
       A.hideLoading(); A.updateRunChip();
       A.toast('未排产：' + err.message);
+      if (A.showWorkflowError) A.showWorkflowError(err);
       if (A.state.config) A.navigate('inputs');
       else A.renderView();
     }
@@ -206,6 +212,8 @@
         var res = A.canReuseSchedule(cached, snapshot.input, snapshot.options) ? cached.result : await SCHED.run(snapshot.input, snapshot.options);
         if (sequence !== A.state.runSequence) return;
         A.state.result = res;
+        if (A.saveScheduleHistory) await A.saveScheduleHistory(res, snapshot);
+        if (sequence !== A.state.runSequence) return;
         if (A.recordDiagnostics) await A.recordDiagnostics(res, null, snapshot);
         if (sequence !== A.state.runSequence) return;
         if (!A.state.gantt.anchor || A.state.gantt.anchor < res.start || A.state.gantt.anchor >= res.monthEnd) A.state.gantt.anchor = res.start;
@@ -221,6 +229,7 @@
         if (A.recordDiagnostics) await A.recordDiagnostics(null, err, snapshot);
         if (sequence !== A.state.runSequence) return;
         A.toast('排产失败：' + err.message);
+        if (A.showWorkflowError) A.showWorkflowError(err);
         if (A.renderDiagnostics) A.navigate('diagnostics');
       }
   };
@@ -239,9 +248,11 @@
   A.updateRunChip = function () {
     if (!A.state.result) { A.$('#run-chip').textContent = A.state.loadError ? '数据待修正' : '尚未排产'; return; }
     var d = new Date(A.state.result.runAt);
-    A.$('#run-chip').textContent = '上次排产 ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + ' · ' + Math.round(A.state.result.runMs) + ' ms';
+    A.$('#run-chip').textContent = (A.state.historyId ? '历史方案 ' : '上次排产 ') + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) + ' · ' + Math.round(A.state.result.runMs) + ' ms';
   };
   A.renderView = function () {
+    if (A.updateHistoryBanner) A.updateHistoryBanner();
+    if (A.state.view === 'history' && A.renderHistory) { A.renderHistory(); return; }
     if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
     if (A.state.view === 'inputs' && (A.state.data || A.state.config) && A.state.mode === 'server') { A.renderInputs(); return; }
     if (!A.state.result) {
@@ -251,7 +262,7 @@
           '\n排产由 Python 后端执行。请运行 <code>python3 run.py</code>，' +
           '然后访问 <code>http://127.0.0.1:8080</code>。</div>';
       }
-      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“数据配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p></div>';
+      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“数据配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p><div class="source-actions"><button class="btn ghost" data-open-view="inputs">检查数据配置</button><button class="btn ghost" data-open-view="history">打开历史方案</button></div></div>';
       return;
     }
     if (A.state.view === 'mps') A.renderMps();

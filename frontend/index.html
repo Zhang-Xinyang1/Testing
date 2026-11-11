@@ -37,14 +37,15 @@
         <span class="nav-ico" data-icon="database"></span><span>数据配置</span>
       </button>
       <button class="nav-item" data-view="diagnostics"><span class="nav-ico">◎</span><span>排产诊断</span></button>
+      <button class="nav-item" data-view="history"><span class="nav-ico">↶</span><span>方案历史</span></button>
     </nav>
     <div class="sidebar-foot">
       <div class="source-card">
-        <div class="source-top"><span class="dot live"></span><span id="source-status">算例数据已载入</span></div>
-        <div class="source-name" id="source-name">Testing调度算例_新版.xlsx</div>
-        <div class="source-meta" id="source-meta">2026-09 · 11,575 lots</div>
+        <div class="source-top"><span class="dot live"></span><span id="source-status">正在读取数据来源</span></div>
+        <div class="source-name" id="source-name">—</div>
+        <div class="source-meta" id="source-meta">—</div>
       </div>
-      <div class="demo-note" id="source-note">内置算例</div>
+      <div class="demo-note" id="source-note">读取配置中</div>
     </div>
   </aside>
 
@@ -52,21 +53,24 @@
     <header class="topbar">
       <div class="topbar-left">
         <h1 id="page-title">MPS 结果</h1>
-        <p id="page-sub">2026 年 9 月 · 月度 MPS 与排产结果</p>
+        <p id="page-sub">月度 MPS 与算法预测完成量</p>
       </div>
       <div class="topbar-right">
         <div class="run-chip" id="run-chip">正在读取数据…</div>
         <button class="btn ghost" id="btn-import" type="button">Excel 导入</button>
-        <button class="btn ghost" id="btn-settings" type="button">排产设置</button>
+        <button class="btn ghost" id="btn-settings" type="button">排产规则</button>
         <button class="btn primary" id="btn-run" type="button">重新排产</button>
       </div>
     </header>
 
     <main class="content" id="content">
+      <div id="snapshot-banner" hidden role="status"></div>
+      <div id="workflow-errors" hidden role="alert"></div>
       <section class="view active" id="view-mps"></section>
       <section class="view" id="view-gantt"></section>
       <section class="view" id="view-inputs"></section>
       <section class="view" id="view-diagnostics"></section>
+      <section class="view" id="view-history"></section>
     </main>
   </div>
 </div>
@@ -88,14 +92,13 @@
     <div class="modal-head">
       <div>
         
-        <h2>排产设置</h2>
+        <h2>排产规则说明</h2>
       </div>
       <button class="icon-btn" id="modal-close" type="button" aria-label="关闭">×</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
     <div class="modal-foot">
-      <button class="btn ghost" id="modal-cancel" type="button">取消</button>
-      <button class="btn primary" id="modal-apply" type="button">应用并排产</button>
+      <button class="btn primary" id="modal-cancel" type="button">知道了</button>
     </div>
   </div>
 </div>
@@ -113,11 +116,14 @@
 <script src="assets/data-loader.js"></script>
 <script src="assets/schedule-client.js"></script>
 <script src="assets/js/core.js"></script>
+<script src="assets/js/workflow.js"></script>
+<script src="assets/js/history.js"></script>
 <script src="assets/js/diagnostics.js"></script>
 <script src="assets/js/mps.js"></script>
 <script src="assets/js/gantt.js"></script>
 <script src="assets/js/maintenance.js"></script>
 <script src="assets/js/configuration.js"></script>
+<script src="assets/js/adjustments.js"></script>
 <script src="assets/js/inputs.js"></script>
 <script src="assets/js/ui.js"></script>
 </body>

@@ -18,7 +18,7 @@
   A.hasConfigurationChanges = function () { return dirty || auxiliary.oracle || auxiliary.plan || !!pendingUpload; };
   function updateDraftStatus() {
     var el = A.$('#cfg-draft-status');
-    if (el) el.textContent = A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿。' + (dirty || pendingUpload ? '生产配置请点击“保存并排产”。' : '') + (auxiliary.oracle ? 'Oracle 项请单独保存。' : '') + (auxiliary.plan ? '新增计划请点击“添加计划并保存”。' : '') : '配置已保存。';
+    if (el) el.textContent = A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿。' + (dirty || pendingUpload ? '生产配置可“仅保存”或“保存并排产”。' : '') + (auxiliary.oracle ? 'Oracle 项请单独保存。' : '') + (auxiliary.plan ? '新增计划请点击“添加计划并保存”。' : '') : '配置已保存。';
   }
   function markDirty(event) {
     if (busy) return;
@@ -50,6 +50,7 @@
     });
     draftState.opened = A.$$('details', root).map(function (el) { return el.open; });
   };
+  A.markConfigurationDirty = markDirty;
   A.restoreConfigurationDraft = function () {
     if (draftState) {
       Object.keys(schemas).forEach(function (key) {
@@ -95,7 +96,7 @@
     return '<label class="config-field">' + label + '<input class="input" id="cfg-' + id + '" type="' + (type || 'text') + '" value="' + esc(value == null ? '' : value) + '"></label>';
   }
   function jsonBox(key, label, value) {
-    return '<details class="config-details"><summary>' + label + '</summary><textarea class="input config-json" id="cfg-' + key + '">' + esc(JSON.stringify(value, null, 2)) + '</textarea></details>';
+    return '<details class="config-details" data-config-part="' + (key === 'source' || key === 'fields' ? 'mapping' : 'advanced') + '"><summary>高级 JSON · ' + label + '</summary><textarea class="input config-json" id="cfg-' + key + '">' + esc(JSON.stringify(value, null, 2)) + '</textarea></details>';
   }
   function resources(bake, probers) {
     var d = configuredData(), values = d.eqp.filter(function(m){return bake || !/OVEN/i.test(m.type);}).map(function(m){return m.id;});
@@ -120,7 +121,7 @@
     }).join('') + '<td><button class="btn ghost small" data-cfg-delete="' + key + '">删除</button></td></tr>';
   }
   function table(key, label, rows) {
-    return '<details class="config-details"><summary>' + label + ' · ' + rows.length + ' 条 · ' + (manual(key) ? '手工配置' : 'Excel') + '</summary>' +
+    return '<details class="config-details" data-config-part="' + (key === 'eqp' ? 'resources' : 'plans') + '"><summary>' + label + ' · ' + rows.length + ' 条 · ' + (manual(key) ? '手工配置' : 'Excel') + '</summary>' +
       '<label><input type="checkbox" id="cfg-override-' + key + '"' + (manual(key) ? ' checked' : '') + '> 手工配置覆盖 Excel</label><p class="config-hint">编辑下表会自动勾选。取消勾选后，保存时重新读取 Excel；当前表格仍为保存前预览。</p>' +
       '<div class="table-scroll config-editor"><table class="data-table" id="cfg-table-' + key + '"><thead><tr>' + schemas[key].map(function (col) { return '<th>' + col[1] + '</th>'; }).join('') + '<th>操作</th></tr></thead><tbody>' + rows.map(function (row) { return rowHTML(key, row); }).join('') + '</tbody></table></div><button class="btn ghost small" data-cfg-new="' + key + '">增加一行</button></details>';
   }
@@ -132,18 +133,18 @@
     var selectedPath = pendingUpload ? pendingUpload.path : c.dataSource.path;
     var selectedName = pendingUpload ? pendingUpload.name : c.dataSource.displayName || selectedPath.split(/[\\/]/).pop();
     var borrow = d.borrow;
-    return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>保存后自动重排，不修改 Excel。</p></div></div><div class="card-body">' +
-      '<div class="config-grid">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复参考配置”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
-      '<details class="config-details"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
+    return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>先核对数据，可仅保存，也可保存并排产；原 Excel 保持只读。</p></div></div><div class="card-body">' +
+      '<div class="config-grid" data-config-part="source">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“仅保存”或“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复 Excel 设备与计划”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
+      '<details class="config-details" data-config-part="advanced"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
-      '<p class="config-hint">BAKE 台数：EQP 中有 OVEN 时以设备行数为准；没有 OVEN 时使用上方配置台数。每台腔体数使用上方配置，请核对实际容量。</p>' +
+      '<p class="config-hint" data-config-part="resources">BAKE 台数：EQP 中有 OVEN 时以设备行数为准；没有 OVEN 时使用上方配置台数。每台腔体数使用上方配置，请核对实际容量。</p>' +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
-      (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
+      (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复 Excel 设备与计划”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
       table('eqp', '设备与 prober 对应关系', d.eqp) + '<p class="config-hint">PM 可填写 EQPID 或 proberID；两者组装为同一设备，任一部件维护都会整组停机。配对部件的指定时间重叠时，仅合并停机区间，两项维护任务均保留；不同时间分别停机。未指定时间仍按两项任务分别安排。编号同时匹配两类对象时请选择对象类型。</p>' + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
-      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中 LotID 唯一时可只填 LotID，同名时还须填写行键（Lot 详情可查看）；重新导入后请核对行键；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) +
-      '<div class="source-actions config-actions"><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复参考配置</button><button class="btn ghost" id="cfg-discard">放弃未保存修改</button></div><p id="cfg-draft-status" class="config-hint" role="status">' + (A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿，保存后才生效。' : '配置已保存。') + '</p>' +
+      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中 LotID 唯一时可只填 LotID，同名时还须填写行键（Lot 详情可查看）；重新导入后请核对行键；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) + (A.taskOverridesHTML ? A.taskOverridesHTML() : '') +
+      '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-validate">检查输入</button><button class="btn ghost" id="cfg-save-only">仅保存</button><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复 Excel 设备与计划</button><button class="btn ghost" id="cfg-discard">放弃未保存修改</button></div><p id="cfg-draft-status" class="config-hint" role="status">' + (A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿，保存后才生效。' : '配置已保存。') + '</p>' +
       ((d.planIssues || []).length ? '<div class="note-card">当前计划冲突：' + d.planIssues.map(esc).join('<br>') + '</div>' : '') +
-      '<div class="section-title"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
+      '<div class="section-title" data-config-part="plans"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
       '<label class="config-field">设备／维护对象<select class="select" id="cfg-machine">' + resources(true, true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
       '<label class="config-field">PM 对象类型<select class="select" id="cfg-target-kind"><option value="">自动识别</option><option value="EQP">EQP</option><option value="PROBER">PROBER</option></select></label>' +
@@ -183,15 +184,16 @@
     if (!base.endsWith('/')) base += '/';
     var res = await fetch(base + path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(update)});
     var body = await res.json();
-    if (!res.ok) throw new Error(body.error || '配置请求失败');
+    if (!res.ok) { var error = new Error(body.error || '配置请求失败'); error.issues = body.issues || []; throw error; }
     return body;
   }
-  async function save(update, includesPlan) {
+  async function save(update, includesPlan, runAfterSave) {
+    if (runAfterSave === undefined) runAfterSave = true;
     // Validate the candidate workbook and scheduling constraints before committing it.
     var preview = await request('api/preview', update);
     if (preview.data.planIssues && preview.data.planIssues.length) throw new Error(preview.data.planIssues.slice(0,5).join('；'));
     var options = JSON.parse(JSON.stringify(A.state.options));
-    var result = await A.SCHED.run(preview.data, options);
+    var result = runAfterSave ? await A.SCHED.run(preview.data, options) : null;
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
     A.state.loadError = null;
@@ -206,7 +208,12 @@
     } else draftState = null;
     skipCapture = true;
     A.updateSourceCard();
-    await A.runSchedule({input:preview.data, options:options, result:result});
+    if (runAfterSave) await A.runSchedule({input:preview.data, options:options, result:result});
+    else {
+      A.state.result = null;
+      A.updateRunChip(); A.renderInputs();
+      A.toast('配置已保存，尚未排产。需要结果时点击“重新排产”。');
+    }
   }
   function plan(eqp) {
     var kind = A.$('#cfg-kind').value, time = A.$('#cfg-time').value, hours = Number(A.$('#cfg-hours').value);
@@ -218,6 +225,18 @@
     }
     return {eqp:eqp, targetKind:A.$('#cfg-target-kind').value, early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};
   }
+  A.commitTaskOverrides = async function (items) {
+    if (busy || A.hasConfigurationChanges()) throw new Error('请先保存或放弃配置草稿，再调整工序');
+    if (A.state.historyId) throw new Error('请先返回当前工作');
+    if (A.clearWorkflowErrors) A.clearWorkflowErrors();
+    var cfg = JSON.parse(JSON.stringify(A.state.config));
+    var update = {dataSource:cfg.dataSource, fieldMap:cfg.fieldMap, scheduling:cfg.scheduling || {}};
+    update.scheduling.taskOverrides = items;
+    setBusy(true);
+    A.showLoading('正在校验手工调整', '试排通过后保存，冲突时保留原配置');
+    try { await save(update); }
+    finally { setBusy(false); A.hideLoading(); }
+  };
   function setBusy(value) {
     busy = value;
     A.$$('.production-config button, .production-config input, .production-config select, .production-config textarea').forEach(function (el) { el.disabled = value; });
@@ -238,7 +257,7 @@
       var pathInput = A.$('#cfg-path'), status = A.$('#cfg-file-status'), output = A.$('#cfg-result');
       if (pathInput) pathInput.value = result.path;
       if (status) status.textContent = result.name;
-      if (output) output.textContent = '已上传 ' + result.name + '。点击保存生效；如需沿用新文件中的机台和计划，请选择“恢复参考配置”。';
+      if (output) output.textContent = '已上传 ' + result.name + '。点击保存生效；如需沿用新文件中的机台和计划，请选择“恢复 Excel 设备与计划”。';
     } catch (err) { A.toast(err.message); event.target.value = ''; }
     finally { setBusy(false); }
   });
@@ -253,8 +272,9 @@
       auxiliary = {oracle:false, plan:false};
       A.renderInputs(); A.toast('已放弃未保存修改，恢复当前已保存配置'); return;
     }
-    if (['cfg-save', 'cfg-add', 'cfg-excel', 'cfg-recommend', 'cfg-oracle-save'].indexOf(id) < 0) return;
+    if (['cfg-save', 'cfg-save-only', 'cfg-validate', 'cfg-add', 'cfg-excel', 'cfg-recommend', 'cfg-oracle-save'].indexOf(id) < 0) return;
     try {
+      if (A.clearWorkflowErrors) A.clearWorkflowErrors();
       if (id === 'cfg-oracle-save') {
         setBusy(true);
         var oracle = {host:A.$('#cfg-oracle-host').value.trim(), port:Number(A.$('#cfg-oracle-port').value), service:A.$('#cfg-oracle-service').value.trim(), user:A.$('#cfg-oracle-user').value.trim(), passwordEnv:A.$('#cfg-oracle-env').value.trim(), views:JSON.parse(A.$('#cfg-oracle-views').value)};
@@ -268,8 +288,14 @@
       var cfg = draft(), kind = A.$('#cfg-kind').value, eqp = A.$('#cfg-machine').value;
       var proposal = (id === 'cfg-add' || id === 'cfg-recommend') ? plan(eqp) : null;
       setBusy(true);
-      if (id === 'cfg-excel') { Object.keys(schemas).forEach(function (key) { delete cfg.scheduling[key]; }); await save(cfg); }
+      if (id === 'cfg-excel') { Object.keys(schemas).forEach(function (key) { delete cfg.scheduling[key]; }); await save(cfg, false, false); }
       else if (id === 'cfg-save') await save(cfg);
+      else if (id === 'cfg-save-only') await save(cfg, false, false);
+      else if (id === 'cfg-validate') {
+        var checked = await request('api/preview', cfg);
+        if ((checked.data.planIssues || []).length) throw new Error(checked.data.planIssues.join('；'));
+        A.$('#cfg-result').textContent = '输入校验通过，尚未保存或排产。实际可排性仍需运行排产确认。';
+      }
       else {
         var preview = await request('api/preview', cfg), data = preview.data;
         var output = A.$('#cfg-result');
@@ -292,6 +318,7 @@
       }
     } catch (err) {
       A.toast(err.message);
+      if (A.showWorkflowError) A.showWorkflowError(err);
       var status = A.$('#cfg-result'); if (status) status.textContent = '未保存：' + err.message;
     } finally { setBusy(false); }
   });

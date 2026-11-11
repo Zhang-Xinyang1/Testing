@@ -12,7 +12,7 @@ from server_core import merge_mps
 from platforms import normalize_platforms, split_platforms
 from input_rules import identifier, parse_datetime, pm_events, resolve_wip, row_key
 
-VERSION = 'diag-5-prober-pm'
+VERSION = 'diag-6-workflow'
 LOCK = threading.Lock()
 CATALOG = {
     'R01': ('机台重叠', '已确认', '查看冲突时段，核对资源占用。'),
@@ -26,6 +26,7 @@ CATALOG = {
     'R09': ('BAKE 时间异常', '已确认', '升温 2h、Recipe 加工 24h、降温 2h；加工结束放行 Lot，降温结束释放腔体。'),
     'R10': ('换卡计时异常', '已确认', '核对初始针卡、在制释放后的针卡类型和 5 分钟换卡占用。'),
     'R11': ('PM 关联资源异常', '已确认', '核对维护对象、proberID 对应关系及全部关联 EQPID 的同步停机。'),
+    'R12': ('手工工序要求未满足', '已确认', '核对指定机台、最早占用开始与固定加工开始；冲突时调整或解除固定要求。'),
     'C01': ('无可用资源', '待核查', '核对工艺、机台 TYPE 和候选针卡。'),
     'C02': ('RUN 缺快照', '已确认', '补充在制资源占用和预计释放时间。'),
     'P01': ('月度未达成', '已确认', '当前方案存在缺口，不等于已证明无解。'),
@@ -64,6 +65,13 @@ def inspect_run(body):
     data = normalize_platforms(data)
     mps_rows = merge_mps(data.get('mps', []))
     tasks, batches = result.get('cpTasks', []), result.get('batches', [])
+    by_operation = {(t.get('lotKey'), t.get('opIndex')): t for t in tasks}
+    for item in data.get('taskOverrides') or []:
+        task = by_operation.get((item['lotKey'], item['opIndex']))
+        if not task or task.get('machine') != item['eqp'] or (
+                item.get('fixedStart') and task.get('start') != ms(item['fixedStart'])) or (
+                item.get('earliestStart') and (task.get('blockStart') or task.get('start', 0)) < ms(item['earliestStart'])):
+            add('R12', item.get('lotId', item['lotKey']) + ' / 第 %d 道工序' % (item['opIndex'] + 1))
     wip = data.get('wip', [])
     if 'lots' in data:
         wip = resolve_wip(data)

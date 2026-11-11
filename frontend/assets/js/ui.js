@@ -39,6 +39,7 @@
     html += '<div class="timeline"><div class="timeline-title">实际工序顺序</div>';
     (lot.routeTasks||[]).forEach(function(t){
       html += '<div class="timeline-item"><div class="timeline-dot">'+esc(t.step)+'</div><div class="timeline-main"><b>'+esc(t.recipe)+'</b><span>'+esc(t.machine||t.chamber||'不占资源等待')+(t.card?' · 针卡类型 '+esc(t.card):'')+(t.setup?' · 换卡 5 min':'')+'</span><div class="timeline-time">'+fmtDateTime(t.start)+' → '+fmtDateTime(t.end)+(t.resourceEnd?' · 腔体释放 '+fmtDateTime(t.resourceEnd):'')+'</div></div></div>';
+      if (t.machine && !A.state.historyId) html += '<button class="btn ghost small" data-task-edit="' + esc(lot.key) + '" data-task-index="' + t.opIndex + '">调整此工序 · ' + esc(t.step) + '</button>';
     });
     html += '</div>';
     openDrawer('LOT DETAIL', lot.id, html);

@@ -11,6 +11,8 @@ from server_core import (ROOT, DEFAULT_CONFIG, load_config, public_config,
 from data_sources import oracle_settings
 from diagnostics import history, record_run
 from scheduler import compact_result, run_schedule
+from schedule_history import list_schedules, read_schedule, save_schedule
+from input_errors import error_response
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -51,15 +53,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(build_payload(self.server.config_path))
             if path == '/api/runs':
                 return self._json({'runs': history(self.server.config_path)})
+            if path == '/api/schedules':
+                return self._json({'schedules': list_schedules(self.server.config_path)})
+            if path.startswith('/api/schedules/'):
+                return self._json(read_schedule(self.server.config_path, path.rsplit('/', 1)[-1]))
             return self.serve_static(path)
         except Exception as e:
             traceback.print_exc()
-            self._json({'ok': False, 'error': str(e)}, 500)
+            self._json(error_response(e), 500)
 
     def do_POST(self):
         endpoint = urlparse(self.path).path
         if endpoint not in ('/api/config', '/api/preview', '/api/uploads',
-                            '/api/oracle/config', '/api/runs', '/api/schedule'):
+                            '/api/oracle/config', '/api/runs', '/api/schedule', '/api/schedules'):
             return self._json({'error': 'Unknown endpoint'}, 404)
         # Configuration writes are same-origin, even when deployed behind a proxy.
         from urllib.parse import urlsplit
@@ -70,10 +76,12 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             if endpoint == '/api/uploads':
                 return self.upload_excel(length)
-            limit = 40_000_000 if endpoint in ('/api/runs', '/api/schedule') else 2_000_000
+            limit = 40_000_000 if endpoint in ('/api/runs', '/api/schedule', '/api/schedules') else 2_000_000
             if not 0 < length <= limit:
                 raise ValueError('请求大小无效')
             update = json.loads(self.rfile.read(length))
+            if endpoint == '/api/schedules':
+                return self._json({'summary': save_schedule(self.server.config_path, update)})
             if endpoint == '/api/runs':
                 return self._json({'ok': True, 'report': record_run(self.server.config_path, update)})
             if endpoint == '/api/schedule':
@@ -98,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.persist_config(cfg)
             return self._json({'ok': True, 'data': payload, 'config': public_config(self.server.config_path)})
         except Exception as e:
-            return self._json({'ok': False, 'error': str(e)}, 400)
+            return self._json(error_response(e), 400)
 
     def schedule(self, body):
         """Run the Python scheduling engine for the current or supplied input."""

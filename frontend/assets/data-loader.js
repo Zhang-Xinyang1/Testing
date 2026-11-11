@@ -13,7 +13,7 @@
     if (!res.ok) {
       var body = await res.json().catch(function () { return {}; });
       var error = new Error(body.error || url + ' -> HTTP ' + res.status);
-      error.status = res.status;
+      error.status = res.status; error.issues = body.issues || [];
       throw error;
     }
     return res.json();
@@ -30,7 +30,7 @@
           return { data: data, config: config, mode: 'server', error: null };
         } catch (dataError) {
           // Keep import and configuration available when the saved workbook is invalid.
-          return { data: null, config: config, mode: 'server', error: dataError.message };
+          return { data: null, config: config, mode: 'server', error: dataError.message, issues: dataError.issues || [] };
         }
       } catch (e) {
         if (e.status === 404 && window.DEMO_DATA) {

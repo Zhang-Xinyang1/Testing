@@ -56,7 +56,7 @@
       body: JSON.stringify({ data: data, options: options || {} })
     });
     var body = await response.json().catch(function () { return {}; });
-    if (!response.ok) throw new Error(body.error || ('排产接口 HTTP ' + response.status));
+    if (!response.ok) { var error = new Error(body.error || ('排产接口 HTTP ' + response.status)); error.issues = body.issues || []; throw error; }
     if (!body.result) throw new Error('排产接口未返回结果');
     return body.result;
   }

@@ -3,6 +3,8 @@
 import json, os, re, math, tempfile, urllib.request
 from datetime import datetime, timedelta, timezone
 from data_sources import oracle_settings, read_oracle
+from input_errors import InputError
+from task_overrides import validate_overrides, lot_signature
 from platforms import clean_type, normalize_platforms, split_platforms
 from input_rules import (base_ppn, flow_product, identifier, ordered_plans,
                          parse_datetime, pm_events, resolve_pm_target, resolve_wip)
@@ -213,9 +215,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
                     display = ' / '.join(map(str, column))
                 else:
                     display = column
-                raise ValueError(source_context(name) + '字段映射不存在：%s.%s → %s；实际表头：%s'
-                                 % (name, logical, display,
-                                    '、'.join(map(str, header))))
+                raise InputError(source_context(name) + '字段映射不存在：%s.%s → %s；实际表头：%s'
+                                 % (name, logical, display, '、'.join(map(str, header))),
+                                 {'table': key, 'sheet': name, 'field': logical, 'section': 'mapping'})
         return header, rows
 
     def field(key, name, default=''):
@@ -465,6 +467,7 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     _, wip_rows = rows_of('wip')
     wip = [{key: get(r, 'wip', key, '') for key in ('lotId', 'lotKey', 'eqp', 'chamber', 'card', 'start', 'end')} for r in wip_rows]
     payload['wip'] = overrides.get('wip', wip)
+    payload['taskOverrides'] = overrides.get('taskOverrides', [])
     payload = normalize_platforms(payload)
     ovens = [e for e in payload['eqp'] if 'OVEN' in e['type'].upper()]
     bake = overrides.get('bakeResources', {})
@@ -478,13 +481,15 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     meta['bakeSource'] = 'eqp' if ovens else 'configured'
     payload['schemaVersion'] = 'confirmed-2026-11-06'
     payload = validate_schedule(payload)
+    payload['lotSignatures'] = {('LOT-%06d' % (i + 1)): lot_signature(payload, i)
+                                for i in range(len(payload['lots']))}
     payload['planIssues'] = calendar_issues(payload)
     return payload
 
 
 def validate_input_dates(data):
     """Report all invalid date fields with their table and input record identity."""
-    issues = []
+    issues, located = [], []
     meta = data.get('meta') or {}
     names = {'borrow': '借机计划', 'pm': 'PM计划', 'wip': '在制',
              'weekly': '周目标', 'lots': 'Lot明细'}
@@ -493,14 +498,20 @@ def validate_input_dates(data):
         return value is None or not str(value).strip()
 
     def check(value, label, optional=False):
+        location = {}
+        if isinstance(label, tuple):
+            label, location = label
+        def add(message):
+            issues.append(message)
+            located.append(dict(location, message=message))
         if blank(value):
             if not optional:
-                issues.append(label + ' 为空')
+                add(label + ' 为空')
             return
         try:
             parse_datetime(value)
         except (ValueError, TypeError, OverflowError):
-            issues.append(label + ' 无效，读取值：' + repr(value)[:120])
+            add(label + ' 无效，读取值：' + repr(value)[:120])
 
     def field_label(table, index, row, field, default):
         source = (meta.get('planSources') or {}).get(table)
@@ -514,8 +525,9 @@ def validate_input_dates(data):
             column = ' / '.join(map(str, column))
         identity = ', '.join('%s=%s' % (key, row[key])
                              for key in ('eqp', 'lotId', 'lotKey', 'ppn', 'week') if row.get(key))
-        return '%s 第 %d 条%s，字段「%s」' % (
+        label = '%s 第 %d 条%s，字段「%s」' % (
             origin, index, '（%s）' % identity if identity else '', column or default)
+        return label, {'table': table, 'sheet': sheet, 'record': index, 'field': field, 'source': source}
 
     check(meta.get('start'), '排产设置 meta.start（开始时间）')
     for table, fields in (
@@ -541,17 +553,18 @@ def validate_input_dates(data):
         shown = '；'.join(issues[:20])
         if len(issues) > 20:
             shown += '；另有 %d 项，请先检查同类日期字段' % (len(issues) - 20)
-        raise ValueError(source + '日期/时间校验失败（共 %d 项）：%s。'
+        raise InputError(source + '日期/时间校验失败（共 %d 项）：%s。'
                          '请核对字段映射和值；日期示例：2026-09-24，时间示例：2026-09-24 08:00。'
-                         % (len(issues), shown))
+                         % (len(issues), shown), issues=located[:20])
 
 
 def validate_schedule(data):
     """Validate business references and occupied resource calendars, without Excel writes."""
     data = normalize_platforms(data)
+    location = {}
     def require(condition, message):
         if not condition:
-            raise ValueError(message)
+            raise InputError(message, location)
 
     def number(value):
         return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
@@ -578,10 +591,12 @@ def validate_schedule(data):
     require(all(isinstance(x, str) and x.strip()  for x in ids)
             and len(set(ids)) == len(ids), '设备编号不能为空或重复')
     machines = {e['id']: e for e in data['eqp']}
-    for e in data['eqp']:
+    for record, e in enumerate(data['eqp'], 1):
+        location = {'table': 'eqp', 'record': record, 'source': data.get('meta', {}).get('eqpSource')}
         require(bool(e.get('type')), '机台 TYPE 不能为空')
         require(len(split_platforms(e['type'])) == 1, '每台设备只能填写一个 TYPE：' + e['id'])
     cp_types = {e['type'] for e in data['eqp'] if 'OVEN' not in e['type'].upper()}
+    location = {}
 
     def validate_platform(value, label):
         selected = split_platforms(value)
@@ -597,9 +612,9 @@ def validate_schedule(data):
                       '、'.join(sorted(cp_types)) or '无 CP 机台组', source))
         if meta.get('eqpSource') == 'override':
             message += (' Excel 原表 TYPE：%s。请核对页面机台配置；'
-                        '“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。'
+                        '“恢复 Excel 设备与计划”会清空机台、PM、借机和在制的全部手工覆盖。'
                         % ('、'.join(meta.get('excelCpTypes') or []) or '无'))
-        raise ValueError(message)
+        raise InputError(message, dict(location, field='platform'))
     bake = data['bakeResources']
     for key in ('machines', 'chambers'):
         require(type(bake.get(key)) is int and 1 <= bake[key] <= 100, 'BAKE 数量和腔体数必须为 1 至 100 的整数')
@@ -612,25 +627,30 @@ def validate_schedule(data):
     require(not (bake_ids & cp_ids), 'BAKE 编号不能与 CP 机台重复')
     chamber_ids = {e + '-C%d' % c for e in bake_ids for c in range(1, bake['chambers'] + 1)}
     require(bool(data['mps']), 'MPS 表没有有效数据，请检查字段映射')
-    for row in data['mps']:
+    for record, row in enumerate(data['mps'], 1):
+        location = {'table': 'mps', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('mps')}
         quantity = num(row.get('mps'), float('nan')) if isinstance(row.get('mps'), str) else row.get('mps')
         require(number(quantity) and quantity >= 0 and quantity == int(quantity),
                 'MPS 每行必须为非负整数 wafer 数：' + str(row.get('ppn')))
         row['mps'] = int(quantity)
     mps_rows = merge_mps(data['mps'])
+    location = {'table': 'mps'}
     require(bool(mps_rows), 'MPS 表没有有效数据，请检查字段映射')
     data['mps'] = mps_rows
     lot_ids = [r[0] for r in data['lots']]
+    location = {'table': 'lots'}
     require(all(isinstance(value, str) and value.strip() for value in lot_ids),
             'LotID 不能为空')
     lots = set(lot_ids)
     wafer_totals = {}
     product_ids = {m['ppn'] for m in mps_rows}
     platforms = {m['ppn']: set(split_platforms(m['platform'])) for m in mps_rows}
-    for m in mps_rows:
+    for record, m in enumerate(mps_rows, 1):
+        location = {'table': 'mps', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('mps')}
         validate_platform(m['platform'], 'PPN ' + m['ppn'])
     flows = data.get('flows') or {}
-    for lot in data['lots']:
+    for record, lot in enumerate(data['lots'], 1):
+        location = {'table': 'lots', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('lots')}
         require(isinstance(lot, list) and len(lot) >= 9, 'Lot 明细需要完整的 9 个字段')
         product = flow_product(lot[0], lot[1], flows)
         require(product in product_ids, 'Lot 引用未知 PPN：' + lot[0])
@@ -646,12 +666,14 @@ def validate_schedule(data):
             except (ValueError, TypeError) as error:
                 raise ValueError('Lot %s 的 %s 无效：%s' % (lot[0], label, lot[index])) from error
         wafer_totals[product] = wafer_totals.get(product, 0) + lot[3]
-    for m in mps_rows:
+    for record, m in enumerate(mps_rows, 1):
+        location = {'table': 'mps', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('mps')}
         require(number(m['mps']) and m['mps'] == int(m['mps']) and m['mps'] >= 0,
                 'MPS 必须为非负整数 wafer 数')
         require(wafer_totals.get(m['ppn'], 0) == m['mps'],
                 '产品 Lot 的 wafer 合计必须等于 MPS：' + m['ppn'])
         validate_platform(m['platform'], 'PPN ' + m['ppn'])
+        location = {'table': 'flow', 'sheet': (data.get('sheetMap') or {}).get('flow'), 'field': m['ppn']}
         require(m['ppn'] in data['flows'], '产品缺少路线：' + m['ppn'])
         steps = [op[0] for op in data['flows'][m['ppn']]]
         require(steps in route_patterns(),
@@ -665,13 +687,15 @@ def validate_schedule(data):
                 require(op[1] in ('210C24H', '250C24H'), 'BAKE Recipe 无效：' + m['ppn'])
             elif op[0] == 'QTIME1':
                 require(str(op[1]) in ('7', '14', '28'), 'QTIME1 Recipe 无效：' + m['ppn'])
-    for constraint in data.get('constraints') or []:
+    for record, constraint in enumerate(data.get('constraints') or [], 1):
+        location = {'table': 'constraints', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('constraints')}
         require(constraint.get('eqp') in cp_ids, '禁加工引用未知 CP 机台：' + str(constraint.get('eqp')))
         require(constraint.get('recipe') in recipe_ids, '禁加工引用未知 Recipe：' + str(constraint.get('recipe')))
         require(not constraint.get('type') or clean_type(constraint['type']) == machines[constraint['eqp']]['type'],
                 '禁加工 TYPE 与机台不一致：' + constraint['eqp'])
     weekly_keys, week_spans = set(), {}
-    for weekly in data.get('weekly') or []:
+    for record, weekly in enumerate(data.get('weekly') or [], 1):
+        location = {'table': 'weekly', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('weekly')}
         key = (base_ppn(weekly['ppn']), weekly['week'])
         require(key[0] in product_ids and key not in weekly_keys, '周目标 PPN 无效或 PPN/Week 重复')
         weekly_keys.add(key)
@@ -684,10 +708,12 @@ def validate_schedule(data):
                 '同一 Week 的日期范围必须一致：' + weekly['week'])
         week_spans[weekly['week']] = span
     spans = sorted(week_spans.values())
+    location = {'table': 'weekly', 'sheet': (data.get('sheetMap') or {}).get('weekly')}
     require(all(spans[i][0] >= spans[i - 1][1] for i in range(1, len(spans))), '不同 Week 的日期范围不能重叠')
     data['wip'] = resolve_wip(data)
     occupied = {}
-    for w in data['wip']:
+    for record, w in enumerate(data['wip'], 1):
+        location = {'table': 'wip', 'record': record, 'source': (data.get('meta', {}).get('planSources') or {}).get('wip')}
         lid, eqp = w['lotId'], w.get('eqp', '')
         # Empty resource means the lot is in a waiting stage; it is still excluded.
         if not eqp:
@@ -710,6 +736,7 @@ def validate_schedule(data):
             if start < b and end > a:
                 require(eqp in bake_ids and (start, end) == (a, b), '在制资源时间冲突：' + resource)
         occupied.setdefault(resource, []).append((start, end, w['lotKey']))
+    location = {'table': 'wip'}
     for resource, entries in occupied.items():
         if resource in chamber_ids:
             groups = {}
@@ -718,9 +745,14 @@ def validate_schedule(data):
             for group in groups.values():
                 require(len(group) <= 4, 'BAKE 在制组批超过 4 lot')
     for key in ('borrow', 'pm'):
-        for p in data[key]:
+        for record, p in enumerate(data[key], 1):
+            location = {'table': key, 'record': record, 'sheet': (data.get('sheetMap') or {}).get(key),
+                        'source': (data.get('meta', {}).get('planSources') or {}).get(key)}
             if key == 'pm':
-                resolve_pm_target(data, p)
+                try:
+                    resolve_pm_target(data, p)
+                except ValueError as error:
+                    raise InputError(str(error), location) from error
             else:
                 require(p['eqp'] in cp_ids, '计划引用未知或不适用机台：' + p['eqp'])
             require(number(p['hours']) and 0 < p['hours'] <= 744, '计划时长必须大于 0 且不超过 744 小时')
@@ -735,6 +767,7 @@ def validate_schedule(data):
                 if p.get('start'):
                     s = date(p['start'])
                     require(s.date() >= early and (s + timedelta(hours=p['hours']) - timedelta(microseconds=1)).date() <= over, 'PM 指定时间超出维护窗口')
+    data['taskOverrides'] = validate_overrides(data)
     return data
 
 

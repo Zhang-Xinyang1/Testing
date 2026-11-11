@@ -6,6 +6,7 @@ No move edits task timestamps or bypasses resource/route constraints.
 """
 import copy
 import math
+from task_overrides import TaskConstraintError
 
 
 POLICIES = (
@@ -73,7 +74,7 @@ def search_schedules(data, options, windows, simulate):
         raise ValueError('searchIterations 必须为 0 至 32 的整数')
     options = dict(options, algorithm=algorithm, searchIterations=iterations)
     best, best_policy, best_window = None, None, windows[0]
-    trials, seen = [], set()
+    trials, seen, rejected = [], set(), []
 
     def evaluate(window, policy, phase, move=''):
         nonlocal best, best_policy, best_window
@@ -85,7 +86,11 @@ def search_schedules(data, options, windows, simulate):
         if identity in seen:
             return False
         seen.add(identity)
-        result = simulate(data, dict(options, bakeWindowHours=window), policy)
+        try:
+            result = simulate(data, dict(options, bakeWindowHours=window), policy)
+        except TaskConstraintError as error:
+            rejected.append(str(error))
+            return True
         accepted = best is None or objective(result) > objective(best)
         trials.append(dict(summary(result), phase=phase,
                            policy=policy['name'] if policy else 'legacy', move=move,
@@ -98,13 +103,13 @@ def search_schedules(data, options, windows, simulate):
     # cannot worsen the objective for the same input and BAKE windows.
     for window in windows:
         evaluate(window, None, 'baseline')
-    baseline = summary(best)
+    baseline = summary(best) if best else None
     if algorithm == 'search':
         for policy in POLICIES:
             for window in windows:
                 evaluate(window, policy, 'multi-start')
         evaluated = 0
-        while evaluated < iterations:
+        while best is not None and evaluated < iterations:
             progressed = False
             # Freeze the parent of this neighborhood even if a move is accepted.
             parent, policy, window = best, best_policy, best_window
@@ -117,6 +122,9 @@ def search_schedules(data, options, windows, simulate):
             if not progressed:
                 break
 
+    if best is None:
+        raise TaskConstraintError((rejected[0] if rejected else '没有可行排程') + '。本次搜索未找到满足固定要求的方案，请调整或解除固定后重试。',
+                                  {'table': 'taskOverrides'})
     best['trials'] = trials
     best['optimization'] = {
         'algorithm': algorithm, 'version': 1,
@@ -125,6 +133,7 @@ def search_schedules(data, options, windows, simulate):
         'selectedPolicy': best_policy['name'] if best_policy else 'legacy',
         'selectedPolicyParameters': copy.deepcopy(best_policy),
         'baseline': baseline, 'selected': summary(best),
+        'rejectedCandidates': len(rejected),
         'globalOptimalityProven': False,
     }
     return best
