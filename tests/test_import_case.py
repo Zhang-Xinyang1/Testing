@@ -50,6 +50,28 @@ def write_export(path, sheets):
 
 
 class ImportCaseTests(unittest.TestCase):
+    def test_weekly_targets_are_validated_before_integer_conversion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'weekly.xlsx'
+            cfg = load_config()
+            cfg['dataSource']['path'] = str(path)
+            cfg['dataSource']['sheetMap']['weekly'] = '周目标'
+            cfg['fieldMap']['周目标'] = dict(platform='Platform', ppn='PPN', week='Week',
+                                           start='Start', end='End', target='Target')
+            for value in (1.9, -0.5, -1, 'oops', '', 'NaN', 'Infinity'):
+                sheets = export_sheets() + [('周目标', [['Platform', 'PPN', 'Week', 'Start', 'End', 'Target'],
+                    ['Alpha', 'ProductA', 'W1', '2026-09-01', '2026-09-07', value]])]
+                write_export(path, sheets)
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, '非负整数 wafer') as error:
+                    build_payload(config=cfg)
+                self.assertIn('PRODUCTA', str(error.exception))
+                self.assertIn('W1', str(error.exception))
+            for value in (0, 25, '25.0', '1,000'):
+                sheets[-1][1][1][-1] = value
+                write_export(path, sheets)
+                data = build_payload(config=cfg)
+                self.assertEqual(data['weekly'][0]['target'], int(str(value).replace(',', '').split('.')[0]))
+
     def test_unused_duplicate_headers_and_extra_sheets_do_not_block_import(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'export.xlsx'

@@ -7,8 +7,7 @@
 
   function renderGantt() {
     var r = A.state.result, g = A.state.gantt;
-    var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
-    var start = ganttStart(r, g, rangeDays);
+    var span = ganttWindow(r, g), rangeDays = span.days, start = span.start;
     var platformOpts = '<option value="all">全部 Platform</option>' +
       Object.keys(A.state.data.platformType).sort().map(function (p) {
         return '<option value="' + p + '"' + (g.platform === p ? ' selected' : '') + '>' + p + ' · ' + A.state.data.platformType[p] + '</option>';
@@ -19,10 +18,10 @@
         '<button data-mode="bake" class="' + (g.mode === 'bake' ? 'active' : '') + '">BAKE 腔体</button>' +
         '<button data-mode="all" class="' + (g.mode === 'all' ? 'active' : '') + '">全部</button></div>' +
       '<span class="label" style="margin-left:8px">范围</span><div class="seg" data-gantt-range>' +
-        ['1d', '3d', '7d', '30d'].map(function (x) {
-          return '<button data-range="' + x + '" class="' + (g.range === x ? 'active' : '') + '">' + ({ '1d': '1天', '3d': '3天', '7d': '7天', '30d': '全月' })[x] + '</button>';
+        ['1d', '3d', '7d', 'month'].map(function (x) {
+          return '<button data-range="' + x + '" class="' + (g.range === x || (x === 'month' && span.fullMonth) ? 'active' : '') + '">' + ({ '1d': '1天', '3d': '3天', '7d': '7天', month: '全月' })[x] + '</button>';
         }).join('') + '</div>' +
-      '<div class="date-nav"><button data-gantt-nav="-1">‹</button><span class="date-label">' + ganttRangeLabel(start, rangeDays) + '</span><button data-gantt-nav="1">›</button></div>' +
+      '<div class="date-nav"><button data-gantt-nav="-1"' + (span.fullMonth || start <= r.start ? ' disabled' : '') + '>‹</button><span class="date-label">' + ganttRangeLabel(start, rangeDays, span.fullMonth) + '</span><button data-gantt-nav="1"' + (span.fullMonth || span.end >= r.monthEnd ? ' disabled' : '') + '>›</button></div>' +
       (g.mode !== 'bake' ? '<select class="select" id="gantt-platform">' + platformOpts + '</select>' : '') +
       '<input class="input search" id="gantt-lot-q" placeholder="定位 Lot，如 PPN01-L0001" value="' + esc(g.q) + '">' +
       '<button class="btn ghost small" data-gantt-month>回到月初</button>' +
@@ -35,24 +34,26 @@
         '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击详情</span>' +
       '</div>' +
       '<div class="gantt-scroll" id="gantt-scroll"><canvas id="gantt-canvas"></canvas></div>' +
-      '<div class="gantt-footer"><span>北京时间 · ' + ganttRangeLabel(start, rangeDays) + '</span><span id="gantt-footer-stat">—</span></div>' +
+      '<div class="gantt-footer"><span>北京时间 · ' + ganttRangeLabel(start, rangeDays, span.fullMonth) + '</span><span id="gantt-footer-stat">—</span></div>' +
     '</div>' +
     '<div class="gantt-tip" id="gantt-tip"></div>';
     $('#view-gantt').innerHTML = html;
     drawGantt();
   }
 
-  function ganttStart(r, g, rangeDays) {
-    if (rangeDays >= 30) return r.start;
+  function ganttWindow(r, g) {
+    var fullMonth = g.range === 'month' || g.range === '30d';
+    var days = fullMonth ? (r.monthEnd - r.start) / DAY : Math.min(({ '1d':1, '3d':3, '7d':7 }[g.range] || 1), (r.monthEnd - r.start) / DAY);
     var anchor = g.anchor || r.start;
     anchor = A.SCHED.parseDate(A.SCHED.dayKey(anchor));
-    return Math.max(r.start, Math.min(r.monthEnd - DAY, anchor));
+    var start = fullMonth ? r.start : Math.max(r.start, Math.min(r.monthEnd - days * DAY, anchor));
+    return {start:start, end:fullMonth ? r.monthEnd : start + days * DAY, days:days, fullMonth:fullMonth};
   }
 
-  function ganttRangeLabel(start, rangeDays) {
+  function ganttRangeLabel(start, rangeDays, fullMonth) {
     var wd = ['日', '一', '二', '三', '四', '五', '六'][new Date(start + 8 * HOUR).getUTCDay()];
     if (rangeDays === 1) return (new Date(start + 8 * HOUR).getUTCMonth() + 1) + '月' + new Date(start + 8 * HOUR).getUTCDate() + '日 周' + wd;
-    if (rangeDays === 30) {
+    if (fullMonth) {
       var mm = (A.state.data.meta && A.state.data.meta.month) || '';
       return mm ? mm.split('-')[0] + ' 年 ' + Number(mm.split('-')[1]) + ' 月' : '全月';
     }
@@ -97,8 +98,7 @@
     if (!canvas || !scroll || !A.state.result) return;
     var r = A.state.result, g = A.state.gantt;
     var rows = buildGanttRows();
-    var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
-    var start = ganttStart(r, g, rangeDays), end = start + rangeDays * DAY;
+    var span = ganttWindow(r, g), rangeDays = span.days, start = span.start, end = span.end;
     var width = Math.max(scroll.clientWidth || 1000, 920);
     var labelW = 170, axisH = 46, padR = 12;
     var height = axisH + rows.reduce(function (a, x) { return a + x.h; }, 0) + 10;
@@ -320,9 +320,12 @@ function ganttHit(e) {
         '<div class="tip-row"><span>资源</span><b>' + esc(hit.res.id) + '</b></div>' +
         '<div class="tip-row"><span>预计释放</span><span>' + fmtDateTime(A.SCHED.parseDate(hit.data.end)) + '</span></div>';
     } else if (hit.type === 'pm') {
+      var plans = A.pmRecordsFor ? A.pmRecordsFor(hit.res.id, hit.data[0], hit.data[1]) : [];
       html = '<div class="tip-title">PM 维护</div>' +
         '<div class="tip-row"><span class="tip-muted">资源</span><b>' + esc(hit.res.id) + '</b></div>' +
-        '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(hit.data[0]) + ' → ' + fmtDateTime(hit.data[1]) + '</span></div>';
+        '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(hit.data[0]) + ' → ' + fmtDateTime(hit.data[1]) + '</span></div>' +
+        plans.map(function (p) { return '<div class="tip-row"><span>原始记录</span><span>' + esc((p.sourceIds || [p.id]).join('、')) + (p.merged ? ' · 已合并' : ' · 单独执行') + '</span></div>'; }).join('') +
+        '<div class="tip-row">点击查看原始窗口、维护对象及停机机台</div>';
     } else if (hit.type === 'borrow') {
       var br = hit.data;
       html = '<div class="tip-title">借机 ' + esc(br.id) + '</div>' +
@@ -365,6 +368,7 @@ function ganttHit(e) {
   }
 
   A.renderGantt = renderGantt;
+  A.ganttWindow = ganttWindow;
   A.drawGantt = drawGantt;
   A.ganttHit = ganttHit;
   A.onGanttMove = onGanttMove;

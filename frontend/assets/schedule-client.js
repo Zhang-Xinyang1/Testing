@@ -39,6 +39,10 @@
     return date.getUTCFullYear() + '-' + pad(date.getUTCMonth() + 1) + '-' +
       pad(date.getUTCDate());
   }
+  function isoDate(value) {
+    if (value == null || !Number.isFinite(value)) return '';
+    return new Date(value + 8 * HOUR).toISOString().slice(0, -1) + '+08:00';
+  }
   function apiBase() {
     var base = window.APP_BASE || '/';
     if (base.charAt(base.length - 1) !== '/') base += '/';
@@ -58,7 +62,7 @@
   }
 
   global.TestingScheduler = {
-    run: run, parseDate: parseDate, fmt: fmt, dayKey: dayKey,
+    run: run, parseDate: parseDate, fmt: fmt, dayKey: dayKey, isoDate: isoDate,
     MIN: MIN, HOUR: HOUR, DAY: DAY
   };
 })(window);

@@ -106,6 +106,8 @@ class ProberPMTests(unittest.TestCase):
                 record = result['pmRecords'][0]
                 self.assertEqual(record['sourceIds'], ['PM-01', 'PM-02'])
                 self.assertEqual([p['eqp'] for p in record['sourcePlans']], ['M1', 'P1'])
+                self.assertEqual([p['hours'] for p in record['sourcePlans']], [4, 4])
+                self.assertEqual(record['affectedProbers'], ['P1'])
                 self.assertTrue(record['merged'])
                 self.assertEqual(record['targetKind'], 'COMBINED')
                 self.assertEqual(record['start'], result['start'] + 8 * HOUR)
@@ -197,14 +199,58 @@ class ProberPMTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'PM 窗口内无连续空档'):
             run(normalized, dict(algorithm='greedy', bakeWindowHours=0))
 
-    def test_direct_tester_pm_does_not_expand_to_other_prober_peers(self):
+    def test_direct_tester_pm_stops_the_whole_prober_assembly(self):
         data = paired_case(shared=True)
         data['pm'] = [pm('M1'), pm('OVEN-1')]
         data['bakeResources']['chambers'] = 4
         result = run(validate_schedule(data), dict(algorithm='greedy', bakeWindowHours=0))
-        self.assertEqual(result['pmRecords'][0]['resources'], ['M1'])
+        self.assertEqual(result['pmRecords'][0]['resources'], ['M1', 'M2'])
+        self.assertEqual(result['pmRecords'][0]['affectedProbers'], ['P1'])
+        self.assertEqual([p['eqp'] for p in result['pmRecords'][0]['sourcePlans']], ['M1'])
         self.assertEqual(result['pmRecords'][1]['resources'], ['OVEN-1-C%d' % n for n in range(1, 5)])
-        self.assertEqual(next(m for m in result['machines'] if m['id'] == 'M2')['pm'], [])
+        self.assertEqual(next(m for m in result['machines'] if m['id'] == 'M2')['pm'],
+                         [[result['pmRecords'][0]['start'], result['pmRecords'][0]['end']]])
+
+    def test_either_component_pm_stops_assembly_without_inventing_peer_maintenance(self):
+        for algorithm in ('greedy', 'search'):
+            for target in ('M1', 'P1'):
+                with self.subTest(algorithm=algorithm, target=target):
+                    data = paired_case(shared=True)
+                    data['pm'] = [pm(target)]
+                    data['borrow'] = [dict(eqp='M2', date='2026-09-01', hours=2)]
+                    result = run(validate_schedule(data), dict(algorithm=algorithm, bakeWindowHours=0, searchIterations=0))
+                    record = result['pmRecords'][0]
+                    self.assertEqual(record['affectedEqps'], ['M1', 'M2'])
+                    self.assertEqual(record['affectedProbers'], ['P1'])
+                    self.assertEqual([p['eqp'] for p in record['sourcePlans']], [target])
+                    self.assertEqual(result['metrics']['pmInputCount'], 1)
+                    self.assertEqual(result['borrows'][0]['start'], record['end'])
+                    for machine in result['machines']:
+                        if machine['id'] in ('M1', 'M2'):
+                            self.assertEqual(machine['pm'], [[record['start'], record['end']]])
+                            self.assertTrue(all(t['blockStart'] >= record['end'] for t in machine['tasks']))
+
+    def test_nonoverlapping_component_maintenance_stops_the_assembly_twice(self):
+        data = paired_case(shared=True)
+        data['pm'] = [dict(pm('M1', start='2026-09-01 08:00'), hours=2),
+                      dict(pm('P1', start='2026-09-01 14:00'), hours=2)]
+        result = run(validate_schedule(data), dict(algorithm='greedy', bakeWindowHours=0))
+        records = result['pmRecords']
+        self.assertEqual(result['metrics']['pmCount'], 2)
+        self.assertEqual([p['sourceIds'] for p in records], [['PM-01'], ['PM-02']])
+        for machine in result['machines']:
+            if machine['id'] in ('M1', 'M2'):
+                self.assertEqual(machine['pm'], [[p['start'], p['end']] for p in records])
+                self.assertEqual(machine['pmMs'], 4 * HOUR)
+        self.assertTrue(all(p['affectedProbers'] == ['P1'] for p in records))
+
+    def test_fixed_eqp_pm_cannot_run_while_any_assembly_member_has_wip(self):
+        data = paired_case(shared=True)
+        data['pm'] = [pm('M1', start='2026-09-01 08:00')]
+        data['wip'] = [dict(lotId='L0', eqp='M2', start='2026-09-01 10:00', end='2026-09-01 11:00')]
+        self.assertTrue(calendar_issues(validate_schedule(data)))
+        with self.assertRaisesRegex(ValueError, 'PM 窗口内无连续空档'):
+            run(data, dict(algorithm='greedy', bakeWindowHours=0))
 
     def test_unknown_ambiguous_and_wrong_kind_fail_without_guessing(self):
         data = paired_case()

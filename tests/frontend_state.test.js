@@ -178,7 +178,7 @@ test('equipment pairing and the original two PM rows survive configuration saves
   const html = app.configurationHTML();
   assert.match(html, /data-field="proberId"[^>]*value="P1"/);
   assert.match(html, /value="PROBER" selected/);
-  assert.match(html, /指定时间重叠时合并维护/);
+  assert.match(html, /指定时间重叠时，仅合并停机区间，两项维护任务均保留/);
   await listeners.click({target:{id:'cfg-save', closest:()=>null}});
   assert.equal(posted.scheduling.eqp[0].proberId, 'P1');
   assert.equal(posted.scheduling.pm.length, 2);
@@ -282,29 +282,41 @@ function editor(data, config) {
   const attr = (tag, name) => decode((tag.match(new RegExp(' ' + name + '="([^"]*)"')) || [,''])[1]);
   app.state.data = data; app.state.config = config;
   app.$ = selector => nodes[selector];
-  app.$$ = (selector, root) => root ? root.fields : (rows[(selector.match(/^#cfg-table-(\w+)/) || [])[1]] || []);
+  app.$$ = (selector, root) => {
+    if (root === nodes['.production-config'] && root) {
+      if (selector === 'details') return root.details;
+      return Object.values(nodes).filter(node => node.id && 'value' in node);
+    }
+    return root ? root.fields : (rows[(selector.match(/^#cfg-table-(\w+)/) || [])[1]] || []);
+  };
   env.context.document = {addEventListener(type, callback) { listeners[type] = callback; }};
+  env.context.window.addEventListener = (type, callback) => { listeners[type] = callback; };
   env.context.fetch = async (url, options) => {
     posted.push(JSON.parse(options.body));
     return {ok:false, json:async()=>({error:'captured preview'})};
   };
   vm.runInContext(env.read('configuration.js'), env.context);
   const html = app.configurationHTML();
+  function mount(html) {
+  nodes['.production-config'] = {details:[{open:false}, {open:true}]};
   for (const tag of html.matchAll(/<input\b[^>]*>/g)) {
     const id = attr(tag[0], 'id');
-    if (id) nodes['#' + id] = {value:attr(tag[0], 'value'), checked:/ checked/.test(tag[0])};
+    if (id) nodes['#' + id] = {id, type:attr(tag[0], 'type'), value:attr(tag[0], 'value'), checked:/ checked/.test(tag[0])};
   }
   for (const tag of html.matchAll(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/g)) {
-    nodes['#' + attr(tag[1], 'id')] = {value:decode(tag[2])};
+    const id = attr(tag[1], 'id');
+    nodes['#' + id] = {id, value:decode(tag[2])};
   }
   nodes['#cfg-file-status'] = {textContent:'input.xlsx'};
-  nodes['#cfg-kind'] = {value:'pm'}; nodes['#cfg-machine'] = {value:'M1'};
-  nodes['#cfg-target-kind'] = {value:''};
+  nodes['#cfg-kind'] = {id:'cfg-kind', value:'pm'}; nodes['#cfg-machine'] = {id:'cfg-machine', value:'M1'};
+  nodes['#cfg-target-kind'] = {id:'cfg-target-kind', value:''};
   nodes['#cfg-result'] = {};
+  nodes['#cfg-draft-status'] = {}; nodes['#cfg-oracle-status'] = {};
   for (const table of html.matchAll(/<table\b([^>]*)>(.*?)<\/table>/g)) {
     const key = attr(table[1], 'id').replace('cfg-table-', '');
+    function mountRows(text) {
     rows[key] = [];
-    for (const row of table[2].matchAll(/<tr data-original="([^"]*)">(.*?)<\/tr>/g)) {
+    for (const row of text.matchAll(/<tr data-original="([^"]*)">(.*?)<\/tr>/g)) {
       const fields = [];
       for (const el of row[2].matchAll(/<input\b[^>]*>|<select\b[^>]*>.*?<\/select>/g)) {
         const tag = el[0], field = attr(tag, 'data-field');
@@ -315,8 +327,14 @@ function editor(data, config) {
       }
       rows[key].push({dataset:{original:decode(row[1])}, fields});
     }
+    }
+    mountRows(table[2]);
+    nodes['#cfg-table-' + key + ' tbody'] = {set innerHTML(text) { mountRows(text); }};
   }
+  }
+  mount(html);
   return {...env, html, nodes, rows, listeners, posted,
+    remount:()=>mount(app.configurationHTML()),
     save:()=>listeners.click({target:{id:'cfg-save', closest:()=>null}})};
 }
 
@@ -418,4 +436,188 @@ test('export buttons before the first schedule explain the required action inste
     listeners.click({target:{closest:selector => selector === '[data-export]' ? {getAttribute:()=>kind} : null}});
   }
   assert.equal(env.messages.filter(message => message.includes('请先排产再导出')).length, 2);
+});
+
+test('raw configuration drafts survive view rebuilds, failed saves and row edits until explicitly discarded', async () => {
+  const data = inputData(); data.eqp = [{id:'M1', type:'A', proberId:'P1'}];
+  data.pm = [{eqp:'M1', early:'2026/11/10', due:'2026/11/10', over:'2026/11/10', start:'2026-11-10 08:00:30', hours:2}];
+  const env = editor(data, inputConfig({pm:data.pm}));
+  env.nodes['#cfg-month'].value = '2026-12';
+  env.nodes['#cfg-fields'].value = '{ unfinished JSON';
+  env.rows.eqp[0].fields.find(f => f.dataset.field === 'proberId').value = 'P2';
+  env.rows.eqp.push({dataset:{original:'{}'}, fields:[{dataset:{field:'id'}, value:'NEW'}, {dataset:{field:'type'}, value:'A'}]});
+  await env.listeners.change({target:{closest:selector=>selector === '[id^="cfg-table-"]' ? {id:'cfg-table-eqp'} : {}}});
+  const rebuild = () => { env.app.captureConfigurationDraft(); env.remount(); env.app.restoreConfigurationDraft(); };
+  env.app.renderInputs = rebuild;
+  rebuild();
+  assert.equal(env.nodes['#cfg-month'].value, '2026-12');
+  assert.equal(env.nodes['#cfg-fields'].value, '{ unfinished JSON');
+  assert.equal(env.nodes['#cfg-override-eqp'].checked, true);
+  assert.equal(env.rows.eqp.length, 2);
+  assert.equal(env.rows.eqp[0].fields.find(f=>f.dataset.field==='proberId').value, 'P2');
+  assert.equal(env.rows.pm[0].fields.find(f=>f.dataset.field==='start').value, '2026-11-10T08:00:30.000');
+  await env.save();
+  assert.equal(env.posted.length, 0); // Incomplete JSON stays in the draft.
+  assert.equal(env.app.hasConfigurationChanges(), true);
+  let prevented = false;
+  env.listeners.beforeunload({preventDefault(){prevented = true;}});
+  assert.equal(prevented, true);
+  env.nodes['#cfg-fields'].value = '{}';
+  await env.save(); // Backend rejects the preview; draft remains.
+  rebuild();
+  assert.equal(env.nodes['#cfg-month'].value, '2026-12');
+  assert.equal(env.rows.eqp.length, 2);
+  await env.listeners.click({target:{id:'cfg-discard', closest:()=>null}});
+  assert.equal(env.app.hasConfigurationChanges(), false);
+  assert.equal(env.nodes['#cfg-month'].value, '2026-11');
+  assert.equal(env.rows.eqp.length, 1);
+});
+
+test('rerun cannot silently ignore a pending configuration draft', async () => {
+  const env = editor(inputData(), inputConfig());
+  env.app.navigate = view => { env.app.state.view = view; };
+  await env.listeners.change({target:{id:'cfg-month', closest:selector=>selector === '.production-config' ? {} : null}});
+  env.context.window.DataLoader = {load:()=>{ throw new Error('should not reload'); }};
+  await env.app.reloadAndRun();
+  assert.equal(env.app.state.view, 'inputs');
+  assert.equal(env.pending.length, 0);
+  assert.match(env.messages.at(-1), /未保存修改/);
+});
+
+test('saving main configuration retains a separate, unsaved Oracle draft', async () => {
+  const env = editor(inputData(), inputConfig());
+  env.nodes['#cfg-oracle-host'].value = 'draft-db.internal';
+  env.listeners.input({target:{id:'cfg-oracle-host', closest:selector=>selector === '.production-config' ? {} : null}});
+  env.context.fetch = async (url, options) => {
+    const update = JSON.parse(options.body);
+    return {ok:true, json:async()=>({data:inputData(), config:{...inputConfig(), ...update}})};
+  };
+  env.app.SCHED.run = async()=>env.result('saved');
+  env.app.updateSourceCard = ()=>{};
+  env.app.runSchedule = async()=>{env.app.captureConfigurationDraft(); env.remount(); env.app.restoreConfigurationDraft();};
+  await env.save();
+  assert.equal(env.nodes['#cfg-oracle-host'].value, 'draft-db.internal');
+  assert.equal(env.app.hasConfigurationChanges(), true);
+  assert.match(env.nodes['#cfg-draft-status'].textContent, /Oracle 项请单独保存/);
+});
+
+test('preview resolves mixed-case mapped sheets and lets users reach all rows', () => {
+  const env = environment(), wrap = {};
+  env.app.$ = ()=>wrap;
+  env.app.state.data = {...inputData(), mps:Array.from({length:125}, (_,i)=>({platform:'A', ppn:'P'+String(i+1).padStart(3,'0'), mps:i+1})),
+    sheetMap:{mps:'ＭＰＳ'}, fieldMap:{MPS:{platform:'Platform', ppn:'Product', mps:'Target'}}, sheetSummary:[{name:'mPs', rows:125}]};
+  env.app.state.inputs = {sheet:'mPs', q:'', page:2};
+  vm.runInContext(env.read('inputs.js'), env.context);
+  env.app.renderInputsTable();
+  assert.match(wrap.innerHTML, /<th>Product<\/th>/);
+  assert.match(wrap.innerHTML, /P051/);
+  assert.match(wrap.innerHTML, /P100/);
+  assert.doesNotMatch(wrap.innerHTML, /P001|P101/);
+  env.app.state.inputs.page = 3;
+  env.app.renderInputsTable();
+  assert.match(wrap.innerHTML, /P125/);
+  assert.match(wrap.innerHTML, /共 125 条/);
+  env.app.state.inputs.q = 'P125';
+  env.app.renderInputsTable();
+  assert.equal(env.app.state.inputs.page, 1);
+  assert.match(wrap.innerHTML, /共 1 条/);
+  env.app.state.inputs.sheet = 'Unmapped';
+  env.app.renderInputsTable();
+  assert.match(wrap.innerHTML, /未映射，不参与排产/);
+  assert.doesNotMatch(wrap.innerHTML, /<td>P125<\/td>/);
+});
+
+test('full-month Gantt canvas uses calendar boundaries including leap February and day 31', () => {
+  const env = environment(), nodes = {}, ctx = new Proxy({}, {get:(obj,key)=>obj[key] || (()=>{})});
+  env.app.$ = selector=>nodes[selector];
+  nodes['#gantt-canvas'] = {style:{}, getContext:()=>ctx};
+  nodes['#gantt-scroll'] = {clientWidth:1000};
+  nodes['#view-gantt'] = {}; nodes['#gantt-footer-stat'] = {};
+  vm.runInContext(env.read('gantt.js'), env.context);
+  for (const [month, next, days] of [['2026-02','2026-03',28], ['2028-02','2028-03',29], ['2026-11','2026-12',30], ['2026-12','2027-01',31]]) {
+    const start = env.app.SCHED.parseDate(month+'-01'), end = env.app.SCHED.parseDate(next+'-01');
+    env.app.state.data = {meta:{month}, platformType:{}};
+    env.app.state.result = {start, monthEnd:end, machines:[], chambers:[]};
+    env.app.state.gantt.range = 'month'; env.app.state.gantt.anchor = start + 10 * env.app.DAY;
+    env.app.renderGantt();
+    assert.equal(env.app.state.ganttGeom.start, start);
+    assert.equal(env.app.state.ganttGeom.end, end);
+    assert.equal((end-start)/env.app.DAY, days);
+    env.app.state.gantt.range = '7d'; env.app.state.gantt.anchor = end-env.app.DAY;
+    const span = env.app.ganttWindow(env.app.state.result, env.app.state.gantt);
+    assert.equal(span.end, end);
+    assert.equal(span.start, end-7*env.app.DAY);
+  }
+});
+
+test('CSV preserves repeated Lot identities, cross-year timestamps and unscheduled lots', () => {
+  const env = environment(), app = env.app;
+  vm.runInContext(env.read('ui.js'), env.context);
+  app.state.data = inputData();
+  const start = app.SCHED.parseDate('2026-12-31 23:00'), end = app.SCHED.parseDate('2027-01-01 01:00:30');
+  app.state.result = {lots:[
+    {key:'LOT-000001', id:'same', routeTasks:[{step:'CP1', machine:'M1', start, end}], complete:end},
+    {key:'LOT-000002', id:'same', routeTasks:[{step:'CP1', machine:'M2', start, end}], complete:end},
+    {key:'LOT-000003', id:'waiting', routeTasks:[], status:'unscheduled', unscheduledReason:'无可用机台,请核对'}]};
+  const csv = app.buildCsv('lots');
+  assert.match(csv.text, /LotKey,LotID/);
+  assert.match(csv.text, /LOT-000001,same/);
+  assert.match(csv.text, /LOT-000002,same/);
+  assert.match(csv.text, /2026-12-31T23:00:00.000\+08:00/);
+  assert.match(csv.text, /2027-01-01T01:00:30.000\+08:00/);
+  assert.match(csv.text, /LOT-000003,waiting/);
+  assert.match(csv.text, /"无可用机台,请核对"/);
+  assert.equal(csv.text.split('\r\n').length, 4);
+});
+
+test('PM details and CSV connect original requests to actual merged events and exclude touching intervals', () => {
+  const env = environment(), app = env.app;
+  vm.runInContext(env.read('maintenance.js'), env.context);
+  vm.runInContext(env.read('ui.js'), env.context);
+  app.state.data = inputData();
+  const source = (id, eqp, kind) => ({id, eqp, targetKind:kind, early:'2026-11-10', due:'2026-11-10', over:'2026-11-10', hours:4, start:'2026-11-10 08:00'});
+  app.state.result = {pmRecords:[
+    {id:'PM-01', start:10, end:20, merged:true, sourceIds:['PM-01','PM-02'], sourcePlans:[source('PM-01','M1','EQP'), source('PM-02','P1','PROBER')], affectedEqps:['M1','M2'], affectedProbers:['P1'], resources:['M1','M2']},
+    {id:'PM-03', start:20, end:30, merged:false, sourcePlans:[source('PM-03','M1','EQP')], affectedEqps:['M1'], resources:['M1']}]};
+  const plans = app.pmRecordsFor('M1',10,20);
+  assert.equal(plans.length, 1);
+  assert.equal(app.pmRecordsFor('M2',20,30).length, 0);
+  assert.match(app.pmTraceHTML(), /维护任务 3 条 → 组合停机 2 次/);
+  let detail;
+  app.openDrawer = (kicker,title,html)=>{detail=html;};
+  app.openPMDrawer(plans);
+  assert.match(detail, /PM-02 · P1 \(PROBER\)/);
+  assert.match(detail, /原始指定开始：2026-11-10 08:00/);
+  assert.match(detail, /受影响 EQPID：M1、M2/);
+  assert.match(detail, /连带停机 Prober：P1/);
+  assert.match(detail, /合并停机，各项维护均保留/);
+  const csv = app.buildCsv('pm');
+  assert.equal(csv.text.split('\r\n').length, 4);
+  assert.match(csv.text, /PM-01,PM-02,P1,PROBER/);
+  assert.match(csv.text, /PM-03,PM-03,M1,EQP/);
+  assert.match(csv.text, /AffectedProberID/);
+  assert.match(csv.text, /M1;M2,P1,M1;M2/);
+});
+
+test('switching preview sheets redraws only the preview and resets search and pagination', () => {
+  const env = environment(), preview = {}, wrapper = {innerHTML:'open preview with unsaved configuration'};
+  env.app.$ = selector=>selector === '#inputs-preview-wrap' ? preview : wrapper;
+  env.app.$$ = ()=>[];
+  env.app.state.data = {...inputData(), sheetMap:{mps:'MPS', eqp:'EQP'}, eqp:[{id:'M1', type:'A'}]};
+  env.app.state.inputs = {sheet:'MPS', page:5, q:'old search'};
+  vm.runInContext(env.read('inputs.js'), env.context);
+  env.app.selectInputSheet('EQP');
+  assert.equal(env.app.state.inputs.page, 1);
+  assert.equal(env.app.state.inputs.q, '');
+  assert.match(preview.innerHTML, /<td>M1<\/td>/);
+  assert.equal(wrapper.innerHTML, 'open preview with unsaved configuration');
+});
+
+test('scheduling a different month resets an out-of-range Gantt anchor', async () => {
+  const env = environment(), start = env.app.SCHED.parseDate('2026-12-01'), end = env.app.SCHED.parseDate('2027-01-01');
+  env.app.state.gantt.anchor = env.app.SCHED.parseDate('2026-11-15');
+  const running = env.app.runSchedule();
+  env.pending[0].resolve({...env.result('December'), start, monthEnd:end});
+  await running;
+  assert.equal(env.app.state.gantt.anchor, start);
 });

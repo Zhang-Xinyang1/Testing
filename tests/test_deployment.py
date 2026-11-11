@@ -33,6 +33,7 @@ class DeploymentContractTests(unittest.TestCase):
             problems = manager.frontend_problems(root)
             self.assertTrue(any('id="btn-import"' in problem for problem in problems))
             self.assertTrue(any('assets/js/inputs.js' in problem for problem in problems))
+            self.assertTrue(any('assets/js/maintenance.js' in problem for problem in problems))
 
     def test_data_contract_requires_frontend_fields(self):
         data = {'mps': [], 'eqp': [], 'recipes': [], 'lots': [], 'flows': {}, 'meta': {'month': '2026-09'}}

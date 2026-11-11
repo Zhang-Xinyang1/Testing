@@ -169,6 +169,7 @@ def inspect_run(body):
                 add('R11', p['id'] + '：未知或重复的维护记录')
             else:
                 if (set(resources) != set(source['resources'])
+                        or ('affectedProbers' in p and set(p['affectedProbers']) != set(source['affectedProbers']))
                         or identifier(p['eqp']) != identifier(source['eqp'])
                         or p.get('sourceIds', [p['id']]) != source['sourceIds']):
                     add('R11', p['id'] + '：应同步停机 ' + '、'.join(source['affectedEqps']) + '；来源 ' + '、'.join(source['sourceIds']))

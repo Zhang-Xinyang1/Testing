@@ -119,9 +119,9 @@ def ordered_plans(plans, kind):
 def resolve_pm_target(data, plan):
     """Resolve one maintenance event to all resources blocked at the same time.
 
-    Keep plan.eqp as the original maintenance object. A prober PM blocks every
-    CP tester associated with it in the effective equipment snapshot. Derived
-    fields supplied by callers are deliberately ignored and recomputed.
+    Keep plan.eqp as the actual maintenance object. Either component's PM stops
+    the whole tester/prober assembly. Derived fields supplied by callers are
+    deliberately ignored and recomputed from the effective pairing snapshot.
     """
     target = identifier(plan.get('eqp'))
     kind = identifier(plan.get('targetKind'))
@@ -146,17 +146,24 @@ def resolve_pm_target(data, plan):
     if not target or not affected:
         raise ValueError('计划引用未知或不适用机台：%s；PM 可填写 EQPID 或 proberID，'
                          '请核对有效 EQP 的对应关系及手工机台覆盖配置' % (target or '空'))
+    probers = sorted({identifier(e.get('proberId')) for e in equipment
+                      if identifier(e['id']) in affected and identifier(e['id']) in cp_ids
+                      and identifier(e.get('proberId'))})
+    if probers:
+        affected = sorted(set(affected) | {identifier(e['id']) for e in equipment
+                                          if identifier(e['id']) in cp_ids
+                                          and identifier(e.get('proberId')) in probers})
     resources = []
     for eqp in affected:
         if eqp in oven_ids:
             resources.extend(eqp + '-C%d' % n for n in range(1, int(bake.get('chambers') or 4) + 1))
         else:
             resources.append(eqp)
-    return {'targetKind': kind, 'affectedEqps': affected, 'resources': resources}
+    return {'targetKind': kind, 'affectedEqps': affected, 'affectedProbers': probers, 'resources': resources}
 
 
 def pm_events(data):
-    """Build calendar events, merging overlapping fixed tester/prober PM rows.
+    """Build downtime events, preserving every component's maintenance request.
 
     Flexible windows alone never imply one maintenance. Only explicit time
     intervals on a related EQP/PROBER pair form a merge edge. Connected rows
@@ -209,6 +216,7 @@ def pm_events(data):
                 due=min((entries[i]['due'] for i in indices), key=parse_datetime),
                 over=max((entries[i]['over'] for i in indices), key=parse_datetime),
                 affectedEqps=sorted({eqp for i in indices for eqp in entries[i]['affectedEqps']}),
+                affectedProbers=sorted({prober for i in indices for prober in entries[i]['affectedProbers']}),
                 resources=sorted({resource for i in indices for resource in entries[i]['resources']}),
                 sourceIds=[entries[i]['id'] for i in indices],
                 sourcePlans=[entries[i]['sourcePlans'][0] for i in indices])

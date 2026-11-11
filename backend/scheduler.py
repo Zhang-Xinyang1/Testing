@@ -356,7 +356,7 @@ def simulate(data, options, policy=None):
             'id': plan['id'], 'eqp': plan['eqp'], 'early': plan['early'],
             'due': plan['due'], 'over': plan['over'], 'hours': plan['hours'],
             'start': slot, 'end': slot + duration, 'status': 'window',
-            **{key: plan[key] for key in ('targetKind', 'affectedEqps', 'resources',
+            **{key: plan[key] for key in ('targetKind', 'affectedEqps', 'affectedProbers', 'resources',
                                           'sourceIds', 'sourcePlans', 'merged')},
         }
         ctx['pmRecords'].append(record)

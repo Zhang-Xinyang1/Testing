@@ -99,7 +99,7 @@
   function applySettings() {
     A.state.options = {strategy:'attainment',borrowMode:'reserve',bakeWindowHours:null,setupMinutes:5};
     closeModal();
-    A.runSchedule();
+    A.reloadAndRun();
   }
 
   function onGlobalClick(e) {
@@ -107,7 +107,7 @@
       var hit = A.ganttHit(e);
       if (hit && hit.type === 'cp') openLotDrawer(hit.data.lotKey || hit.data.lotId);
       else if (hit && hit.type === 'bake') openBatchDrawer(hit.data.id);
-      else if (hit && hit.type === 'pm') A.toast('PM 维护：' + hit.res.id + ' · ' + fmtDateTime(hit.data[0]) + ' → ' + fmtDateTime(hit.data[1]));
+      else if (hit && hit.type === 'pm') A.openPMDrawer(A.pmRecordsFor(hit.res.id, hit.data[0], hit.data[1]));
       else if (hit && hit.type === 'borrow') A.toast('借机 ' + hit.data.id + ' · ' + hit.data.eqp + ' · 按指定时间执行');
       else if (hit && hit.type === 'wip') A.toast('在制 Lot ' + hit.data.lotId + ' · 预计释放 ' + fmtDateTime(A.SCHED.parseDate(hit.data.end)));
       return;
@@ -119,19 +119,20 @@
     var grange = e.target.closest('[data-gantt-range] button');
     if (grange) {
       A.state.gantt.range = grange.getAttribute('data-range');
-      if (A.state.gantt.range === '30d') A.state.gantt.anchor = A.state.result.start;
+      if (A.state.gantt.range === 'month') A.state.gantt.anchor = A.state.result.start;
       A.renderGantt(); return;
     }
     var gnav = e.target.closest('[data-gantt-nav]');
     if (gnav) {
-      var days = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[A.state.gantt.range] || 1;
+      var span = A.ganttWindow(A.state.result, A.state.gantt);
+      if (span.fullMonth) return;
       A.state.gantt.anchor = Math.max(A.state.result.start,
-        Math.min(A.state.result.monthEnd - DAY, A.state.gantt.anchor + Number(gnav.getAttribute('data-gantt-nav')) * days * DAY));
+        Math.min(A.state.result.monthEnd - span.days * DAY, span.start + Number(gnav.getAttribute('data-gantt-nav')) * span.days * DAY));
       A.renderGantt(); return;
     }
     if (e.target.closest('[data-gantt-month]')) { A.state.gantt.anchor = A.state.result.start; A.renderGantt(); return; }
     var sheet = e.target.closest('[data-inputs-sheet]');
-    if (sheet) { A.state.inputs.sheet = sheet.getAttribute('data-inputs-sheet'); A.state.inputs.q = ''; A.renderInputs(); return; }
+    if (sheet) { A.selectInputSheet(sheet.getAttribute('data-inputs-sheet')); return; }
     var exp = e.target.closest('[data-export]');
     if (exp) { exportCsv(exp.getAttribute('data-export')); return; }
     var opt = e.target.closest('.option');
@@ -152,6 +153,7 @@
     if (e.target.id === 'inputs-q') {
       var v = e.target.value;
       A.state.inputs.q = v;
+      A.state.inputs.page = 1;
       A.renderInputsTable();
       var n = $('#inputs-q');
       if (n) { n.focus(); n.setSelectionRange(v.length, v.length); }
@@ -161,36 +163,51 @@
 
   function csvCell(v) {
     var s = String(v == null ? '' : v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
-  function exportCsv(kind) {
-    if (!A.state.result) { A.toast('尚无排产结果，请先排产再导出'); return; }
+  function buildCsv(kind) {
     var lines = [], filename = '';
+    var csvDate = A.SCHED.isoDate;
     if (kind === 'mps') {
       var rows = A.mpsRows();
       lines.push(['Platform', 'PPN', 'MPS_Target_Wafers', 'Lot_Count', 'WIP_Excluded_Lots', 'Completed_Wafers', 'Delta_Wafers', 'Achievement',
         'First_Completion', 'Last_Completion', 'Status'].map(csvCell).join(','));
       rows.forEach(function (x) {
         lines.push([x.platform, x.ppn, x.mps, x.lots, x.wip, x.completed, x.delta, pct(x.rate, 2),
-          fmtDateTime(x.first), fmtDateTime(x.last), x.status].map(csvCell).join(','));
+          csvDate(x.first), csvDate(x.last), x.status].map(csvCell).join(','));
       });
       filename = 'MPS_comparison_' + (A.state.data.meta.month || '') + '.csv';
+    } else if (kind === 'pm') {
+      lines.push(['EventID','SourcePMID','SourceTarget','TargetKind','Early','Due','Over','RequestedStart','RequestedHours','AffectedEQPID','AffectedProberID','Resources','ActualStart','ActualEnd','MergedDowntime'].join(','));
+      (A.state.result.pmRecords || []).forEach(function (p) {
+        A.pmSources(p).forEach(function (s) {
+          lines.push([p.id, s.id, s.eqp, s.targetKind, s.early, s.due, s.over, s.start || '', s.hours,
+            (p.affectedEqps || [p.eqp]).join(';'), (p.affectedProbers || []).join(';'), (p.resources || [p.eqp]).join(';'), csvDate(p.start), csvDate(p.end), !!p.merged].map(csvCell).join(','));
+        });
+      });
+      filename = 'PM_trace_' + (A.state.data.meta.month || '') + '.csv';
     } else {
-      lines.push(['LotID','PROD','Platform','Wafer_Qty','StepIndex','STEP','RECIPE','Resource','CardType','Start','End','LotComplete','Status'].map(csvCell).join(','));
+      lines.push(['LotKey','LotID','PROD','Platform','Wafer_Qty','StepIndex','STEP','RECIPE','Resource','CardType','Start','End','ResourceEnd','LotComplete','Status','UnscheduledReason'].map(csvCell).join(','));
       A.state.result.lots.forEach(function(l){
-        (l.routeTasks||[]).forEach(function(t,i){
-          lines.push([l.id,l.prod,l.platform,l.wafer,i+1,t.step,t.recipe,t.machine||t.chamber||'',t.card||'',fmtDateTime(t.start),fmtDateTime(t.end),fmtDateTime(l.complete),l.status].map(csvCell).join(','));
+        var tasks = l.routeTasks || [];
+        (tasks.length ? tasks : [{}]).forEach(function(t,i){
+          lines.push([l.key,l.id,l.prod,l.platform,l.wafer,tasks.length ? i+1 : '',t.step,t.recipe,t.machine||t.chamber||'',t.card||'',csvDate(t.start),csvDate(t.end),csvDate(t.resourceEnd),csvDate(l.complete),l.status,l.unscheduledReason || ''].map(csvCell).join(','));
         });
       });
       filename = 'schedule_lots_' + (A.state.data.meta.month || '') + '.csv';
     }
-    var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    return {filename:filename, text:'\ufeff' + lines.join('\r\n')};
+  }
+  function exportCsv(kind) {
+    if (!A.state.result) { A.toast('尚无排产结果，请先排产再导出'); return; }
+    var csv = buildCsv(kind);
+    var blob = new Blob([csv.text], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = filename;
+    a.href = URL.createObjectURL(blob); a.download = csv.filename;
     document.body.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 300);
-    A.toast('已导出 ' + filename);
+    A.toast('已导出 ' + csv.filename);
   }
 
   A.openDrawer = openDrawer;
@@ -201,6 +218,7 @@
   A.openSettings = openSettings;
   A.closeModal = closeModal;
   A.applySettings = applySettings;
+  A.buildCsv = buildCsv;
 
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('change', onGlobalChange);

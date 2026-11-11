@@ -34,6 +34,7 @@ REQUIRED_FRONTEND = (
     'assets/js/diagnostics.js',
     'assets/js/mps.js',
     'assets/js/gantt.js',
+    'assets/js/maintenance.js',
     'assets/js/configuration.js',
     'assets/js/inputs.js',
     'assets/js/ui.js',
@@ -47,6 +48,7 @@ FRONTEND_MARKERS = (
     'assets/js/core.js',
     'assets/js/inputs.js',
     'assets/js/configuration.js',
+    'assets/js/maintenance.js',
 )
 
 

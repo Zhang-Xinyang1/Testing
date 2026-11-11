@@ -30,7 +30,7 @@
     view: 'mps',
     mps: { q: '', platform: 'all' },
     gantt: { mode: 'all', range: '1d', anchor: 0, platform: 'all', q: '' },
-    inputs: { sheet: 'MPS', q: '' },
+    inputs: { sheet: 'MPS', q: '', page: 1 },
     ganttRegions: [], ganttRows: [], ganttGeom: null,
     draft: null
   };
@@ -42,6 +42,8 @@
   A.fmtDate = function (ms) { if (ms == null || !isFinite(ms)) return '—'; var d = new Date(ms + 8 * HOUR); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate(); };
   A.fmtDateTime = function (ms) { return ms != null && isFinite(ms) ? A.fmtDate(ms) + ' ' + SCHED.fmt(ms, false) : '—'; };
   A.pad2 = function (n) { return n < 10 ? '0' + n : '' + n; };
+  // Same name matching rules as backend.server_core.norm_key.
+  A.sheetKey = function (value) { return String(value == null ? '' : value).normalize('NFKC').replace(/[\ufeff\u200b\u200c\u200d\u2060\s_\-.&＆]/g, '').toLowerCase(); };
   A.bar = function (v, cls) { return '<div class="bar ' + (cls || '') + '"><span style="width:' + (Math.max(0, Math.min(1, v)) * 100).toFixed(1) + '%"></span></div>'; };
   A.pfBadge = function (p) { return '<span class="platform-badge pf-' + A.esc(p) + '">' + A.esc(p) + '</span>'; };
   A.strategyName = function (s) {
@@ -139,6 +141,7 @@
   };
 
   A.openExcelImport = function () {
+    if (A.configurationBusy && A.configurationBusy()) { A.toast('正在处理配置，请稍候'); return; }
     if (A.state.mode !== 'server') {
       A.toast('Excel 导入需要启动后端服务：运行 python3 run.py 后访问 http://127.0.0.1:8080');
       return;
@@ -160,6 +163,12 @@
   };
   A.reloadAndRun = async function () {
     if (A.state.mode !== 'server') { A.toast('请连接 Python 服务后排产'); return; }
+    if (A.configurationBusy && A.configurationBusy()) { A.toast('正在处理配置，请稍候'); return; }
+    if (A.hasConfigurationChanges && A.hasConfigurationChanges()) {
+      A.navigate('inputs');
+      A.toast('有未保存修改，请先保存配置、添加计划，或放弃修改后重新排产');
+      return;
+    }
     var sequence = A.state.runSequence = (A.state.runSequence || 0) + 1;
     A.state.result = null;
     A.showLoading('正在读取已保存的数据', '读取完成后开始排产');
@@ -199,7 +208,7 @@
         A.state.result = res;
         if (A.recordDiagnostics) await A.recordDiagnostics(res, null, snapshot);
         if (sequence !== A.state.runSequence) return;
-        if (!A.state.gantt.anchor) A.state.gantt.anchor = res.start;
+        if (!A.state.gantt.anchor || A.state.gantt.anchor < res.start || A.state.gantt.anchor >= res.monthEnd) A.state.gantt.anchor = res.start;
         A.hideLoading();
         A.updateRunChip();
         A.renderView();
@@ -242,7 +251,7 @@
           '\n排产由 Python 后端执行。请运行 <code>python3 run.py</code>，' +
           '然后访问 <code>http://127.0.0.1:8080</code>。</div>';
       }
-      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“输入与配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p></div>';
+      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“数据配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p></div>';
       return;
     }
     if (A.state.view === 'mps') A.renderMps();

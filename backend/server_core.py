@@ -339,11 +339,18 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
                'hours': getn(r, 'borrow', 'hours', 0)} for r in borrow_rows]
 
     _, weekly_rows = rows_of('weekly')
-    weekly = [{'platform': str(get(r, 'weekly', 'platform', '')).strip(),
-               'ppn': base_ppn(get(r, 'weekly', 'ppn', '')),
-               'week': str(get(r, 'weekly', 'week', '')).strip(),
-               'start': get(r, 'weekly', 'start', ''), 'end': get(r, 'weekly', 'end', ''),
-               'target': int(getn(r, 'weekly', 'target', 0))} for r in weekly_rows]
+    weekly = []
+    for index, r in enumerate(weekly_rows, 1):
+        target = getn(r, 'weekly', 'target', float('nan'))
+        ppn = base_ppn(get(r, 'weekly', 'ppn', ''))
+        week = str(get(r, 'weekly', 'week', '')).strip()
+        if not math.isfinite(target) or target < 0 or target != int(target):
+            raise ValueError('周目标第 %d 条（PPN %s，Week %s）必须为非负整数 wafer 数，实际值：%s'
+                             % (index, ppn, week, get(r, 'weekly', 'target', '')))
+        weekly.append({'platform': str(get(r, 'weekly', 'platform', '')).strip(),
+                       'ppn': ppn, 'week': week,
+                       'start': get(r, 'weekly', 'start', ''), 'end': get(r, 'weekly', 'end', ''),
+                       'target': int(target)})
 
     # ---- params / mappings / borrow generation times ----
     _, params = rows_of('params')

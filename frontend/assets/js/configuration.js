@@ -2,12 +2,82 @@
 (function () {
   'use strict';
   var A = window.TSApp, esc = A.esc, busy = false, pendingUpload = null;
+  var dirty = false, draftState = null, skipCapture = false;
+  var auxiliary = {oracle:false, plan:false};
+  function fieldGroup(id) {
+    if ((id || '').indexOf('cfg-oracle-') === 0) return 'oracle';
+    return ['cfg-kind','cfg-machine','cfg-target-kind','cfg-time','cfg-hours','cfg-early','cfg-due','cfg-over'].indexOf(id) >= 0 ? 'plan' : 'main';
+  }
   var schemas = {
     eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['proberId', 'proberID'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
     borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number']],
     pm: [['eqp', '维护对象（EQPID / proberID）', 'maintenance'], ['targetKind', '对象类型', 'target-kind'], ['early', '最早日期', 'date'], ['due', '期望日期', 'date'], ['over', '最迟完成日期', 'date'], ['hours', '连续小时', 'number'], ['start', '指定开始（可留空）', 'datetime-local']],
     wip: [['lotId', '在制 LotID'], ['lotKey', '行键（同名 Lot 必填）'], ['eqp', '占用机台（等待可空）', 'resource'], ['chamber', 'BAKE 腔体（CP 留空）'], ['card', '占用针卡（BAKE 留空）'], ['start', '占用开始', 'datetime-local'], ['end', '预计释放', 'datetime-local']]
   };
+  A.configurationBusy = function () { return busy; };
+  A.hasConfigurationChanges = function () { return dirty || auxiliary.oracle || auxiliary.plan || !!pendingUpload; };
+  function updateDraftStatus() {
+    var el = A.$('#cfg-draft-status');
+    if (el) el.textContent = A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿。' + (dirty || pendingUpload ? '生产配置请点击“保存并排产”。' : '') + (auxiliary.oracle ? 'Oracle 项请单独保存。' : '') + (auxiliary.plan ? '新增计划请点击“添加计划并保存”。' : '') : '配置已保存。';
+  }
+  function markDirty(event) {
+    if (busy) return;
+    var target = event && event.target;
+    if (target && (!target.closest || !target.closest('.production-config') || target.type === 'file')) return;
+    var table = target && target.closest('[id^="cfg-table-"]');
+    if (table) markManual(table.id.slice('cfg-table-'.length));
+    var group = fieldGroup(target && target.id);
+    if (group === 'main') dirty = true;
+    else auxiliary[group] = true;
+    updateDraftStatus();
+  }
+  // Keep raw form values, including incomplete JSON, separate from validated input.
+  // Capture only before rebuilding the view, rather than copying large tables on each keypress.
+  A.captureConfigurationDraft = function () {
+    if (skipCapture) { skipCapture = false; return; }
+    var root = A.$('.production-config');
+    if (!A.hasConfigurationChanges() || !root) return;
+    draftState = {fields:[], tables:{}, opened:[]};
+    A.$$('input[id], select[id], textarea[id]', root).forEach(function (el) {
+      if (el.type !== 'file') draftState.fields.push({id:el.id, value:el.value, checked:el.checked});
+    });
+    Object.keys(schemas).forEach(function (key) {
+      draftState.tables[key] = A.$$('#cfg-table-' + key + ' tbody tr').map(function (tr) {
+        return {original:tr.dataset.original, fields:A.$$('[data-field]', tr).map(function (el) {
+          return {field:el.dataset.field, value:el.value};
+        })};
+      });
+    });
+    draftState.opened = A.$$('details', root).map(function (el) { return el.open; });
+  };
+  A.restoreConfigurationDraft = function () {
+    if (draftState) {
+      Object.keys(schemas).forEach(function (key) {
+        var tbody = A.$('#cfg-table-' + key + ' tbody');
+        if (!tbody) return;
+        var rows = draftState.tables[key];
+        if (!rows) return;
+        tbody.innerHTML = rows.map(function (row) { return rowHTML(key, JSON.parse(row.original || '{}')); }).join('');
+        A.$$('#cfg-table-' + key + ' tbody tr').forEach(function (tr, i) {
+          A.$$('[data-field]', tr).forEach(function (el) {
+            var field = rows[i].fields.find(function (f) { return f.field === el.dataset.field; });
+            if (field) el.value = field.value;
+          });
+        });
+      });
+      draftState.fields.forEach(function (field) {
+        var el = A.$('#' + field.id);
+        if (el) { el.value = field.value; if (el.type === 'checkbox') el.checked = field.checked; }
+      });
+      A.$$('details', A.$('.production-config')).forEach(function (el, i) { el.open = !!draftState.opened[i]; });
+    }
+    updateDraftStatus();
+    if (busy) setBusy(true);
+  };
+  document.addEventListener('input', markDirty);
+  window.addEventListener('beforeunload', function (event) {
+    if (A.hasConfigurationChanges() || busy) { event.preventDefault(); event.returnValue = ''; }
+  });
   function localTime(value) {
     if (!value) return '';
     var ms = A.SCHED.parseDate(value);
@@ -69,9 +139,9 @@
       '<p class="config-hint">BAKE 台数：EQP 中有 OVEN 时以设备行数为准；没有 OVEN 时使用上方配置台数。每台腔体数使用上方配置，请核对实际容量。</p>' +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
       (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
-      table('eqp', '设备与 prober 对应关系', d.eqp) + '<p class="config-hint">PM 可填写 EQPID 或 proberID；prober 维护会在同一时段锁定所有对应 EQPID。同一对设备的指定时间重叠时合并维护，停机覆盖最早开始至最晚结束；没有指定时间或区间不重叠时分别执行。编号同时匹配两类对象时请选择对象类型。</p>' + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
+      table('eqp', '设备与 prober 对应关系', d.eqp) + '<p class="config-hint">PM 可填写 EQPID 或 proberID；两者组装为同一设备，任一部件维护都会整组停机。配对部件的指定时间重叠时，仅合并停机区间，两项维护任务均保留；不同时间分别停机。未指定时间仍按两项任务分别安排。编号同时匹配两类对象时请选择对象类型。</p>' + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
       '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中 LotID 唯一时可只填 LotID，同名时还须填写行键（Lot 详情可查看）；重新导入后请核对行键；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) +
-      '<div class="source-actions config-actions"><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复参考配置</button></div>' +
+      '<div class="source-actions config-actions"><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复参考配置</button><button class="btn ghost" id="cfg-discard">放弃未保存修改</button></div><p id="cfg-draft-status" class="config-hint" role="status">' + (A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿，保存后才生效。' : '配置已保存。') + '</p>' +
       ((d.planIssues || []).length ? '<div class="note-card">当前计划冲突：' + d.planIssues.map(esc).join('<br>') + '</div>' : '') +
       '<div class="section-title"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
@@ -116,7 +186,7 @@
     if (!res.ok) throw new Error(body.error || '配置请求失败');
     return body;
   }
-  async function save(update) {
+  async function save(update, includesPlan) {
     // Validate the candidate workbook and scheduling constraints before committing it.
     var preview = await request('api/preview', update);
     if (preview.data.planIssues && preview.data.planIssues.length) throw new Error(preview.data.planIssues.slice(0,5).join('；'));
@@ -125,7 +195,16 @@
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
     A.state.loadError = null;
+    A.captureConfigurationDraft();
     if (pendingUpload && body.config.dataSource.path === pendingUpload.path) pendingUpload = null;
+    dirty = false;
+    if (includesPlan) auxiliary.plan = false;
+    // Main saves do not submit the separate Oracle form or an unadded proposal.
+    if (draftState && (auxiliary.oracle || auxiliary.plan)) {
+      draftState.tables = {};
+      draftState.fields = draftState.fields.filter(function (f) { return auxiliary[fieldGroup(f.id)]; });
+    } else draftState = null;
+    skipCapture = true;
     A.updateSourceCard();
     await A.runSchedule({input:preview.data, options:options, result:result});
   }
@@ -139,14 +218,12 @@
     }
     return {eqp:eqp, targetKind:A.$('#cfg-target-kind').value, early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};
   }
-  function addedBorrow(result, count) { return result.borrows.find(function (b) { return b.id === 'BR-' + String(count).padStart(2, '0'); }); }
   function setBusy(value) {
     busy = value;
     A.$$('.production-config button, .production-config input, .production-config select, .production-config textarea').forEach(function (el) { el.disabled = value; });
   }
   document.addEventListener('change', async function (event) {
-    var table = event.target.closest && event.target.closest('[id^="cfg-table-"]');
-    if (table && !busy) markManual(table.id.slice('cfg-table-'.length));
+    markDirty(event);
     if (event.target.id !== 'cfg-file' || busy) return;
     var file = event.target.files[0]; if (!file) return;
     if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 20 * 1024 * 1024) { A.toast('请选择不超过 20 MB 的 .xlsx 文件'); event.target.value = ''; return; }
@@ -156,6 +233,8 @@
       var res = await fetch(base + 'api/uploads', {method:'POST', headers:{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'X-Filename':encodeURIComponent(file.name)}, body:file});
       var result = await res.json(); if (!res.ok) throw new Error(result.error || '上传失败');
       pendingUpload = {path:result.path, name:result.name};
+      dirty = true;
+      updateDraftStatus();
       var pathInput = A.$('#cfg-path'), status = A.$('#cfg-file-status'), output = A.$('#cfg-result');
       if (pathInput) pathInput.value = result.path;
       if (status) status.textContent = result.name;
@@ -166,21 +245,30 @@
   document.addEventListener('click', async function (event) {
     var add = event.target.closest('[data-cfg-new]'), del = event.target.closest('[data-cfg-delete]');
     if (busy) return;
-    if (add) { var key = add.dataset.cfgNew; markManual(key); A.$('#cfg-table-' + key + ' tbody').insertAdjacentHTML('beforeend', rowHTML(key, {})); return; }
-    if (del) { markManual(del.dataset.cfgDelete); del.closest('tr').remove(); return; }
+    if (add) { var key = add.dataset.cfgNew; markManual(key); A.$('#cfg-table-' + key + ' tbody').insertAdjacentHTML('beforeend', rowHTML(key, {})); markDirty(); return; }
+    if (del) { markManual(del.dataset.cfgDelete); del.closest('tr').remove(); markDirty(); return; }
     var id = event.target.id;
+    if (id === 'cfg-discard') {
+      dirty = false; draftState = null; pendingUpload = null; skipCapture = false;
+      auxiliary = {oracle:false, plan:false};
+      A.renderInputs(); A.toast('已放弃未保存修改，恢复当前已保存配置'); return;
+    }
     if (['cfg-save', 'cfg-add', 'cfg-excel', 'cfg-recommend', 'cfg-oracle-save'].indexOf(id) < 0) return;
     try {
-      var cfg = draft(), kind = A.$('#cfg-kind').value, eqp = A.$('#cfg-machine').value;
-      var proposal = (id === 'cfg-add' || id === 'cfg-recommend') ? plan(eqp) : null;
-      setBusy(true);
       if (id === 'cfg-oracle-save') {
+        setBusy(true);
         var oracle = {host:A.$('#cfg-oracle-host').value.trim(), port:Number(A.$('#cfg-oracle-port').value), service:A.$('#cfg-oracle-service').value.trim(), user:A.$('#cfg-oracle-user').value.trim(), passwordEnv:A.$('#cfg-oracle-env').value.trim(), views:JSON.parse(A.$('#cfg-oracle-views').value)};
         var saved = await request('api/oracle/config', oracle);
         A.state.config.oracle = saved.oracle;
+        auxiliary.oracle = false;
+        updateDraftStatus();
         A.$('#cfg-oracle-status').textContent = '配置已保存；接口预留，尚未连接数据库。';
+        return;
       }
-      else if (id === 'cfg-excel') { Object.keys(schemas).forEach(function (key) { delete cfg.scheduling[key]; }); await save(cfg); }
+      var cfg = draft(), kind = A.$('#cfg-kind').value, eqp = A.$('#cfg-machine').value;
+      var proposal = (id === 'cfg-add' || id === 'cfg-recommend') ? plan(eqp) : null;
+      setBusy(true);
+      if (id === 'cfg-excel') { Object.keys(schemas).forEach(function (key) { delete cfg.scheduling[key]; }); await save(cfg); }
       else if (id === 'cfg-save') await save(cfg);
       else {
         var preview = await request('api/preview', cfg), data = preview.data;
@@ -188,12 +276,12 @@
         if (id === 'cfg-add') {
           data[kind].push(proposal);
           cfg.scheduling[kind] = data[kind];
-          await save(cfg);
+          await save(cfg, true);
         } else if (kind === 'pm') {
           data.pm.push(proposal);
           var result = await A.SCHED.run(data, A.state.options), pmId = 'PM-' + String(data.pm.length).padStart(2, '0');
           var pm = result.pmRecords.find(function (p) { return (p.sourceIds || [p.id]).indexOf(pmId) >= 0; });
-          output.textContent = '维护对象 ' + (pm.sourcePlans || [{eqp:pm.eqp}]).map(function(p){return p.eqp;}).join('、') + '，停机 EQPID：' + (pm.affectedEqps || [pm.eqp]).join('、') + (pm.merged ? '，已合并为一次维护' : '') + '，推荐维护时间：' + A.fmtDateTime(pm.start) + ' → ' + A.fmtDateTime(pm.end) + '。点击“添加计划并保存”后生效。';
+          output.textContent = '维护对象 ' + (pm.sourcePlans || [{eqp:pm.eqp}]).map(function(p){return p.eqp;}).join('、') + '，停机 EQPID：' + (pm.affectedEqps || [pm.eqp]).join('、') + '，连带停机 Prober：' + ((pm.affectedProbers || []).join('、') || '—') + (pm.merged ? '，停机区间已合并，各项维护均保留' : '，单项维护、整组停机') + '，推荐维护时间：' + A.fmtDateTime(pm.start) + ' → ' + A.fmtDateTime(pm.end) + '。点击“添加计划并保存”后生效。';
         } else {
           data.borrow.push(proposal);
           var trial=await A.SCHED.run(data,A.state.options);
