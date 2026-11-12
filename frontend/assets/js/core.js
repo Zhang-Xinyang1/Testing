@@ -83,7 +83,7 @@
       } else {
         A.hideLoading();
         A.updateRunChip();
-        if (res.error) A.navigate('inputs');
+        if (res.error && !(A.isProductionView && A.isProductionView())) A.navigate('inputs');
         else A.renderView();
       }
       if (res.error) A.toast((res.mode === 'server' ? '数据读取失败，可在输入与配置页修正：' : '已使用内置数据：') + res.error);
@@ -121,7 +121,7 @@
     A.$('#modal').addEventListener('click', function (e) { if (e.target.id === 'modal') A.closeModal(); });
     window.addEventListener('hashchange', function () {
       var v = (location.hash || '').replace('#', '');
-      if (A.TITLES[v] && v !== A.state.view) { if (v === 'inputs' && A.leaveHistoricalView) A.leaveHistoricalView(); A.state.view = v; A.syncNav(); A.renderView(); }
+      if (A.TITLES[v] && v !== A.state.view) { if (['inputs','production','tracking','replanning'].includes(v) && A.leaveHistoricalView) A.leaveHistoricalView(); A.state.view = v; A.syncNav(); A.renderView(); }
     });
   };
 
@@ -133,7 +133,7 @@
   };
 
   A.navigate = function (view) {
-    if (view === 'inputs' && A.leaveHistoricalView) A.leaveHistoricalView();
+    if (['inputs','production','tracking','replanning'].indexOf(view) >= 0 && A.leaveHistoricalView) A.leaveHistoricalView();
     if (!A.TITLES[view]) return;
     A.state.view = view;
     history.replaceState(null, '', '#' + view);
@@ -165,6 +165,7 @@
       JSON.stringify(cached.options) === JSON.stringify(options));
   };
   A.reloadAndRun = async function () {
+    if (A.isProductionView && A.isProductionView()) { A.startProductionTrial(); return; }
     if (A.leaveHistoricalView) A.leaveHistoricalView();
     if (A.clearWorkflowErrors) A.clearWorkflowErrors();
     if (A.state.mode !== 'server') { A.toast('请连接 Python 服务后排产'); return; }
@@ -252,6 +253,8 @@
   };
   A.renderView = function () {
     if (A.updateHistoryBanner) A.updateHistoryBanner();
+    if (A.isProductionView && A.isProductionView()) { A.renderProduction(); return; }
+    if (A.updateProductionShell) A.updateProductionShell(false);
     if (A.state.view === 'history' && A.renderHistory) { A.renderHistory(); return; }
     if (A.state.view === 'diagnostics' && A.renderDiagnostics) { A.renderDiagnostics(); return; }
     if (A.state.view === 'inputs' && (A.state.data || A.state.config) && A.state.mode === 'server') { A.renderInputs(); return; }

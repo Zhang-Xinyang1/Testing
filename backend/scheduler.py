@@ -50,6 +50,15 @@ def day_key(value):
     return '%d-%s-%s' % (stamp.year, pad(stamp.month), pad(stamp.day))
 
 
+def iso_date(value):
+    return datetime.fromtimestamp(value / 1000, CST).isoformat()
+
+
+def in_month(value, ctx):
+    """Production snapshots use an exclusive next-month boundary."""
+    return value < ctx['monthEnd'] if ctx['data'].get('productionRules') else value <= ctx['monthEnd']
+
+
 def wafers(rows):
     return sum((row.get('wafer') or 0) for row in rows)
 
@@ -128,6 +137,8 @@ class Heap:
 
 
 def _fair(a, b):
+    if a.get('deliveryFirst') and a.get('shipDue') != b.get('shipDue'):
+        return -1 if a['shipDue'] < b['shipDue'] else 1
     # Lower fair rank first; large total-work products get a small head start.
     a_score = a['fairRank'] - PRODUCT_WORK_WEIGHT * a.get('prodWorkShare', 0)
     b_score = b['fairRank'] - PRODUCT_WORK_WEIGHT * b.get('prodWorkShare', 0)
@@ -244,15 +255,17 @@ def _dispatch_key(lot, now, policy, month_ms):
              + policy.get('lotBias', {}).get(lot['key'], 0))
     # Defer work that cannot possibly finish this month, but still schedule it
     # later so the returned horizon contains every feasible lot.
-    return (now + remaining > lot['monthEnd'], score,
+    return ((lot['shipDue'],) if lot.get('deliveryFirst') else ()) + (now + remaining > lot['monthEnd'], score,
             lot['fairRank'], lot['prod'], lot['id'], lot['key'])
 
 
 def simulate(data, options, policy=None):
     from task_overrides import TaskConstraintError
+    from production_rules import recipe_minutes, recipe_at
+    recipe_setup = recipe_minutes(data) * MIN
     adjustments = {(p['lotKey'], p['opIndex']): p for p in data.get('taskOverrides') or []}
     start = parse_date(data['meta']['start'])
-    month_end = start + data['meta']['days'] * DAY
+    month_end = parse_date(data['meta']['monthEnd']) if data['meta'].get('monthEnd') else start + data['meta']['days'] * DAY
     ctx = {
         'data': data, 'options': options, 'start': start, 'monthEnd': month_end,
         'horizonEnd': month_end, 'horizonDays': data['meta']['days'],
@@ -292,7 +305,7 @@ def simulate(data, options, policy=None):
             'kind': 'cp', 'id': e['id'], 'eqp': e['id'], 'type': e['type'],
             'index': index, 'initialCard': e.get('card'), 'card': e.get('card'),
             'cardUpdatedAt': start,
-            'initialRecipe': e.get('recipe'), 'free': start, 'pm': [], 'reserved': [],
+            'initialRecipe': e.get('recipe'), 'recipe': e.get('recipe'), 'free': start, 'pm': [], 'reserved': [],
             'tasks': [], 'borrows': [], 'intervals': [], 'wip': [], 'prodMs': 0,
             'setupMs': 0, 'setupCount': 0, 'borrowMs': 0, 'pmMs': 0,
             'available': e.get('status') == 'RUN',
@@ -342,6 +355,11 @@ def simulate(data, options, policy=None):
             ctx['cardMap'][card_id]['recipes'][recipe['recipe']] = True
 
     pm_resources = {resource['id']: resource for resource in ctx['machines'] + ctx['chambers']}
+    for block in data.get('fixedBlocks', []):
+        resource = pm_resources[block['resource']]
+        resource['reserved'].append([block['start'], block['end']])
+        if resource['kind'] == 'cp':
+            resource['wip'].append(dict(block, start=iso_date(block['start']), end=iso_date(block['end'])))
     for plan in pm_events(data):
         resources = [pm_resources[key] for key in plan['resources']]
         blocks = []
@@ -402,7 +420,7 @@ def simulate(data, options, policy=None):
         row = data['lots'][int(key[0].split('-')[-1]) - 1]
         op = data['flows'][row[1]][key[1]]
         first = parse_date(item['fixedStart'])
-        span = [max(start, parse_date(item['reserveStart']) if item.get('reserveStart') else first - 5 * MIN),
+        span = [max(start, parse_date(item['reserveStart']) if item.get('reserveStart') else first - 5 * MIN - recipe_setup),
                 first + op[2] * MIN * row[3]]
         machine = ctx['machineMap'][item['eqp']]
         existing = machine['pm'] + machine['reserved'] + [s for _, s in fixed_holds.get(item['eqp'], [])]
@@ -454,6 +472,7 @@ def simulate(data, options, policy=None):
             'weekEnd': parse_date(row[6]) + DAY,
             'fairRank': rank / max(1, ctx['prodMps'].get(product, 0)),
             'index': 0, 'ready': parse_date(row[4]), 'status': 'pending',
+            'shipDue': parse_date(row[7]), 'deliveryFirst': bool(data.get('productionRules')),
         }
         ctx['lots'].append(lot)
         allowed = groups(lot['platform'])
@@ -498,10 +517,13 @@ def simulate(data, options, policy=None):
 
     def enter(lot, when):
         if lot['index'] >= len(lot['ops']):
-            lot['complete'] = when
-            lot['status'] = 'on-time' if when <= month_end else 'late-month'
+            lot['routeEnd'] = when
+            lot['complete'] = max((t['end'] for t in lot['routeTasks'] if t['step'] != 'QTIME1'), default=when) if data.get('productionRules') else when
+            if data.get('productionRules'):
+                lot['restEnd'] = lot['complete'] + 336 * HOUR
+            lot['status'] = 'on-time' if in_month(lot['complete'],ctx) else 'late-month'
             done[lot['prod']] = done.get(lot['prod'], 0) + (
-                lot['wafer'] if when <= month_end else 0)
+                lot['wafer'] if in_month(lot['complete'],ctx) else 0)
             return
         op = lot['ops'][lot['index']]
         lot['ready'] = when
@@ -555,10 +577,10 @@ def simulate(data, options, policy=None):
             # leave a different card installed on this machine.
             released = [w for w in machine['wip']
                         if machine['cardUpdatedAt'] < parse_date(w['end']) <= now]
-            if released:
-                last_wip = max(released, key=lambda w: parse_date(w['end']))
-                machine['card'] = last_wip.get('card') or machine['initialCard']
-                machine['cardUpdatedAt'] = parse_date(last_wip['end'])
+            for released_work in sorted(released,key=lambda w:parse_date(w['end'])):
+                machine['card'] = released_work.get('card') or machine['card']
+                machine['recipe'] = released_work.get('recipe') or machine['recipe']
+                machine['cardUpdatedAt'] = parse_date(released_work['end'])
             if policy is not None and not adjustments:
                 available_at = earliest_slot(machine, now, 1)
                 if available_at > now:
@@ -585,7 +607,9 @@ def simulate(data, options, policy=None):
                 card = machine['card'] if machine['card'] in cards else cards[0]
                 if adjustment and adjustment.get('fixedStart'):
                     card = adjustment['card']
-                setup = 0 if card == machine['card'] else 5 * MIN
+                card_setup = 0 if card == machine['card'] else 5 * MIN
+                change_recipe = recipe_setup if op[1] != machine['recipe'] else 0
+                setup = card_setup + change_recipe
                 # CP.TIME is minutes per wafer; machine time scales with lot wafers.
                 process_ms = op[2] * MIN * lot['wafer']
                 duration = process_ms + setup
@@ -634,6 +658,8 @@ def simulate(data, options, policy=None):
                 'platform': lot['platform'], 'wafer': lot['wafer'], 'step': op[0],
                 'recipe': op[1], 'timePerWafer': op[2],
                 'duration': process_ms, 'setup': best_setup,
+                'cardSetup': 0 if best_card == machine['card'] else 5 * MIN,
+                'recipeSetup': recipe_setup if op[1] != machine['recipe'] else 0,
                 'blockStart': now, 'start': now + best_setup, 'end': end,
                 'machine': machine['id'], 'eqp': machine['id'],
                 'type': machine['type'], 'card': best_card, 'week': lot['week'],
@@ -647,6 +673,7 @@ def simulate(data, options, policy=None):
             if best_setup:
                 machine['setupCount'] += 1
             machine['card'] = best_card
+            machine['recipe'] = op[1]
             machine['cardUpdatedAt'] = end
             lot['cpTasks'].append(task)
             lot['routeTasks'].append(task)
@@ -734,6 +761,29 @@ def simulate(data, options, policy=None):
         if not math.isfinite(lot['complete']):
             lot['status'] = 'unscheduled'
 
+    for block in data.get('fixedBlocks', []):
+        if block.get('kind') != 'frozen' or block['resource'] not in ctx['machineMap']:
+            continue
+        machine = ctx['machineMap'][block['resource']]
+        completed = [t for t in machine['tasks'] if t['end'] <= block['start']]
+        completed += [dict(w, end=parse_date(w['end'])) for w in machine['wip'] if parse_date(w['end']) <= block['start']]
+        previous_card = machine['initialCard']
+        for task in sorted(completed, key=lambda t:t['end']):
+            previous_card = task.get('card') or previous_card
+        previous_recipe = recipe_at(machine, block['start'], completed)
+        needed = (5*MIN if previous_card != block.get('card') else 0) + (recipe_setup if previous_recipe != block.get('recipe') else 0)
+        if needed > block.get('setup',0):
+            raise TaskConstraintError('冻结工序的切换时间不足，请核对设备状态或调整冻结范围：' + machine['id'], {'table':'fixedBlocks'})
+
+    for borrow in ctx['borrows']:
+        required = borrow['req'].get('recipe')
+        if borrow.get('reserved') and required:
+            machine = ctx['machineMap'][borrow['eqp']]
+            commitments = [dict(w, end=parse_date(w['end'])) for w in machine['wip']]
+            actual = recipe_at(machine, borrow['start'], machine['tasks'], commitments)
+            borrow.update(requiredRecipe=required, recipeAtStart=actual, recipeMatched=actual == required)
+            if actual != required:
+                raise TaskConstraintError('借机开始时 Recipe 不匹配：%s，要求 %s，预计 %s' % (borrow['eqp'], required, actual or '未知'), {'table': 'borrow'})
     tasks = {(task['lotKey'], task['opIndex']): task
              for machine in ctx['machines'] for task in machine['tasks']}
     for key, item in adjustments.items():
@@ -751,7 +801,7 @@ def simulate(data, options, policy=None):
     result['productStats'] = []
     for m in mps_rows:
         completed_lots = [lot for lot in ctx['lots']
-                          if lot['prod'] == m['ppn'] and lot['complete'] <= month_end]
+                          if lot['prod'] == m['ppn'] and in_month(lot['complete'],ctx)]
         completed = sum(lot['wafer'] for lot in completed_lots)
         result['productStats'].append({
             'ppn': m['ppn'], 'platform': m['platform'], 'mps': m['mps'],
@@ -781,7 +831,7 @@ def finalize(ctx):
     total_lots = len(ctx['lots'])
     target_wafers = sum(m['mps'] for m in ctx['data'].get('mps') or [])
     completed_wafers = wafers(
-        [lot for lot in ctx['lots'] if lot['complete'] <= ctx['monthEnd']])
+        [lot for lot in ctx['lots'] if in_month(lot['complete'],ctx)])
     wip_keys = {w['lotKey'] for w in ctx['wip']}
     wip_wafers = sum(row[3] for index, row in enumerate(ctx['data'].get('lots') or [])
                      if row_key(index) in wip_keys)
@@ -810,7 +860,7 @@ def finalize(ctx):
             return False
         if lot['complete'] < meta['end']:
             return True
-        return week_key == last_week_key and lot['complete'] <= ctx['monthEnd']
+        return week_key == last_week_key and in_month(lot['complete'],ctx)
 
     if not has_weekly_targets:
         for product in products:
@@ -842,10 +892,10 @@ def finalize(ctx):
                 planned_week = wafers([
                     lot for lot in product_lots
                     if week_start <= lot['complete'] < week_end
-                    or (lot['complete'] == week_end == ctx['monthEnd'])])
+                    or (lot['complete'] == week_end == ctx['monthEnd'] and not ctx['data'].get('productionRules'))])
                 planned_cum = wafers(
                     [lot for lot in product_lots if lot['complete'] < week_end
-                     or (lot['complete'] == week_end == ctx['monthEnd'])])
+                     or (lot['complete'] == week_end == ctx['monthEnd'] and not ctx['data'].get('productionRules'))])
                 gap_value = planned_cum - cum_target
                 weekly_rows.append({
                     'platform': weekly['platform'], 'ppn': product,
@@ -891,7 +941,7 @@ def finalize(ctx):
         product_lots = [lot for lot in ctx['lots']
                         if ctx['prodPlatform'].get(lot['prod']) == platform]
         done = wafers([lot for lot in product_lots
-                       if lot['complete'] <= ctx['monthEnd']])
+                       if in_month(lot['complete'],ctx)])
         on_time = wafers([lot for lot in product_lots if lot['status'] == 'on-time'])
         util = (sum(m['prodMs'] + m['setupMs'] for m in platform_machines)
                 / (len(platform_machines) * month_ms)) if platform_machines else 0
@@ -916,7 +966,7 @@ def finalize(ctx):
     ctx['weeklySummary'] = weekly_summary
     ctx['platformStats'] = platform_stats
     completed_month = sum(1 for lot in ctx['lots']
-                          if lot['complete'] <= ctx['monthEnd'])
+                          if in_month(lot['complete'],ctx))
     on_time = sum(1 for lot in ctx['lots'] if lot['status'] == 'on-time')
     late_week = sum(1 for lot in ctx['lots'] if lot['status'] == 'late-week')
     late_month = sum(1 for lot in ctx['lots'] if lot['status'] == 'late-month')
@@ -967,8 +1017,7 @@ def finalize(ctx):
             / (max(1, len(ctx['machines'])) * month_ms), 0, 1),
         'bakeUtil': clamp(bake_load, 0, 1), 'bakeLoad': bake_load,
         'cardUtil': clamp(card_util, 0, 1), 'setups': setups,
-        'setupMinutes': setups * (ctx['options'].get('setupMinutes')
-                                  if ctx['options'].get('setupMinutes') is not None else 5),
+        'setupMinutes': sum(m['setupMs'] for m in ctx['machines']) / MIN,
         'pmCount': len(ctx['pmRecords']), 'pmInWindow': pm_in_window,
         'pmInputCount': len(ctx['data'].get('pm') or []),
         'pmMergedRows': len(ctx['data'].get('pm') or []) - len(ctx['pmRecords']),
@@ -1093,7 +1142,7 @@ def make_json_safe(value):
     return value
 
 
-def run(data, options=None):
+def run(data, options=None, progress=None):
     from optimizer import search_schedules
     from task_overrides import validate_overrides
 
@@ -1118,7 +1167,7 @@ def run(data, options=None):
             or not math.isfinite(w) or not 0 <= w <= 24 for w in windows):
         raise ValueError('BAKE 等待窗口须为 0 至 24 小时，最多 8 个候选值')
     windows = list(dict.fromkeys(windows))
-    best = search_schedules(data, options, windows, simulate)
+    best = search_schedules(data, options, windows, simulate, progress)
     best['runMs'] = int((time.monotonic() - started) * 1000)
     best['runAt'] = datetime.now(timezone.utc).isoformat(
         timespec='milliseconds').replace('+00:00', 'Z')

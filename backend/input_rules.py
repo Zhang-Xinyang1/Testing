@@ -22,9 +22,9 @@ def normalize_identifiers(data):
     fields = {
         'mps': ('ppn',), 'weekly': ('ppn', 'week'),
         'eqp': ('id', 'proberId', 'card', 'recipe'), 'recipes': ('recipe',),
-        'pm': ('eqp', 'targetKind'), 'borrow': ('eqp',),
+        'pm': ('eqp', 'targetKind'), 'borrow': ('eqp', 'recipe'),
         'constraints': ('eqp', 'recipe', 'type'),
-        'wip': ('lotKey', 'eqp', 'chamber', 'card'),
+        'wip': ('lotKey', 'eqp', 'chamber', 'card', 'recipe'),
     }
     for table, columns in fields.items():
         if table not in data:

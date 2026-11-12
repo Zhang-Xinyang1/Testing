@@ -3,6 +3,7 @@ import hashlib
 import json
 from input_errors import InputError
 from input_rules import identifier, parse_datetime, row_key
+from production_rules import recipe_minutes
 
 
 class TaskConstraintError(InputError):
@@ -76,7 +77,7 @@ def validate_overrides(data):
             if item.get('reserveStart'):
                 try:
                     lead = (parse_datetime(item['fixedStart']) - parse_datetime(item['reserveStart'])).total_seconds()
-                    require(0 <= lead <= 300, '换卡预留必须在加工前 0 至 5 分钟内')
+                    require(0 <= lead <= (5 + recipe_minutes(data)) * 60, '切换预留超出配置的换卡与 Recipe 切换时长')
                 except (TypeError, ValueError) as error:
                     raise InputError(str(error), dict(location, field='reserveStart')) from error
         item.update(lotKey=key, opIndex=op_index, eqp=eqp, lotId=lot[0])

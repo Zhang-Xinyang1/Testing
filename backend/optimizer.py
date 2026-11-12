@@ -6,6 +6,7 @@ No move edits task timestamps or bypasses resource/route constraints.
 """
 import copy
 import math
+import time
 from task_overrides import TaskConstraintError
 
 
@@ -23,7 +24,12 @@ def objective(result):
     completed = [lot['complete'] for lot in result['lots']
                  if lot.get('complete') is not None and math.isfinite(lot['complete'])]
     span = max(completed + [result['start']]) - result['start']
-    return (rates, result['metrics']['completedWafers'],
+    delivery = result.get('data', {}).get('productionRules')
+    late = [(lot, max(0, lot['complete'] - lot['shipDue'])) for lot in result['lots']
+            if lot.get('shipDue') is not None]
+    due_score = (-sum(lot['wafer'] for lot, delay in late if delay > 0),
+                 -sum(delay * lot['wafer'] for lot, delay in late)) if delivery else ()
+    return due_score + (rates, result['metrics']['completedWafers'],
             -result['metrics']['unscheduledLots'], -span,
             -sum(m['setupMs'] for m in result['machines']))
 
@@ -36,8 +42,8 @@ def summary(result):
         'completedMonth': result['metrics']['completedMonth'],
         'completedWafers': result['metrics']['completedWafers'],
         'unscheduledLots': result['metrics']['unscheduledLots'],
-        'makespanHours': -score[3] / 3600000,
-        'setupMinutes': -score[4] / 60000,
+        'makespanHours': -score[-2] / 3600000,
+        'setupMinutes': -score[-1] / 60000,
     }
 
 
@@ -65,7 +71,7 @@ def _neighbors(result, policy):
             yield 'insert:' + lot['key'], candidate
 
 
-def search_schedules(data, options, windows, simulate):
+def search_schedules(data, options, windows, simulate, progress=None):
     algorithm = options.get('algorithm', 'search')
     if algorithm not in ('greedy', 'search'):
         raise ValueError('algorithm 必须为 greedy 或 search')
@@ -75,9 +81,13 @@ def search_schedules(data, options, windows, simulate):
     options = dict(options, algorithm=algorithm, searchIterations=iterations)
     best, best_policy, best_window = None, None, windows[0]
     trials, seen, rejected = [], set(), []
+    started = time.monotonic()
+    budget = min(1800, data.get('productionRules', {}).get('maxRuntimeSeconds', 1800))
 
     def evaluate(window, policy, phase, move=''):
         nonlocal best, best_policy, best_window
+        if time.monotonic() - started >= budget:
+            return False
         # Identity excludes the human-readable name; equal neighbors are not rerun.
         identity = (window, None if policy is None else (
             policy['workWeight'], policy['tailWeight'],
@@ -97,6 +107,8 @@ def search_schedules(data, options, windows, simulate):
                            bakeWindowHours=window, accepted=accepted))
         if accepted:
             best, best_policy, best_window = result, policy, window
+        if progress:
+            progress(best, len(trials), accepted)
         return True
 
     # The original scheduler is always included as an incumbent. Thus search
@@ -128,7 +140,7 @@ def search_schedules(data, options, windows, simulate):
     best['trials'] = trials
     best['optimization'] = {
         'algorithm': algorithm, 'version': 1,
-        'objective': 'leximin-attainment, wafers, scheduled-lots, makespan, setups',
+        'objective': ('shipping-deadline, ' if data.get('productionRules') else '') + 'leximin-attainment, wafers, scheduled-lots, makespan, setups',
         'evaluations': len(trials), 'localSearchBudget': iterations,
         'selectedPolicy': best_policy['name'] if best_policy else 'legacy',
         'selectedPolicyParameters': copy.deepcopy(best_policy),

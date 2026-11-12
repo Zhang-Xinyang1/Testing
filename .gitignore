@@ -5,6 +5,7 @@ __pycache__/
 config/uploads/
 config/runs/
 config/schedules/
+config/production/
 .runtime/
 .artifacts/
 ~$*

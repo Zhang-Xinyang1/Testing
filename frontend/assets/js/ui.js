@@ -87,6 +87,7 @@
   }
 
   function openSettings() {
+    if (A.isProductionView && A.isProductionView()) { A.openProductionSettings(); return; }
     A.state.draft = JSON.parse(JSON.stringify(A.state.options));
     var html = '<p>目标：各 PPN 月末 MPS 达成率均衡。换卡固定 5 分钟。</p><p>系统比较多种派工顺序，并针对低达成率产品和延期 Lot 重新排程，保留综合目标最好的方案。可跨组产品按每道 CP 的资源可用情况选机。</p><p>BAKE 每腔最多 4 Lot，升温 2h、Recipe 加工 24h、降温/换 Lot 2h，共占腔 28h，Lot 在第 26h 放行。算法比较立即开批与等待 4h、8h 的方案。</p><p>借机固定机台，指定日期内开始，允许跨日。</p>';
     $('#modal-body').innerHTML = html;

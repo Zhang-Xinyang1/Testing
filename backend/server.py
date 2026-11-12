@@ -13,6 +13,9 @@ from diagnostics import history, record_run
 from scheduler import compact_result, run_schedule
 from schedule_history import list_schedules, read_schedule, save_schedule
 from input_errors import error_response
+from production import (read_state, update as production_update, adopt as production_adopt,
+                        daily_check, archive as archive_production, read_plan)
+from production_jobs import TrialJobs
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -51,6 +54,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(public_config(self.server.config_path))
             if path == '/api/data':
                 return self._json(build_payload(self.server.config_path))
+            if path == '/api/production':
+                return self._json(read_state(self.server.config_path))
+            if path == '/api/production/job':
+                return self._json({'job':self.production_jobs().read()})
+            if path.startswith('/api/production/plans/'):
+                return self._json(read_plan(self.server.config_path,path.rsplit('/',1)[-1]))
             if path == '/api/runs':
                 return self._json({'runs': history(self.server.config_path)})
             if path == '/api/schedules':
@@ -64,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         endpoint = urlparse(self.path).path
+        if endpoint.startswith('/api/production/'):
+            return self.production_post(endpoint.rsplit('/',1)[-1])
         if endpoint not in ('/api/config', '/api/preview', '/api/uploads',
                             '/api/oracle/config', '/api/runs', '/api/schedule', '/api/schedules'):
             return self._json({'error': 'Unknown endpoint'}, 404)
@@ -127,6 +138,37 @@ class Handler(BaseHTTPRequestHandler):
         data = validate_schedule(data)
         return self._json({'ok': True,
                            'result': compact_result(run_schedule(data, options))})
+
+    def production_jobs(self):
+        with CONFIG_LOCK:
+            if not hasattr(self.server, 'trial_jobs'):
+                self.server.trial_jobs = TrialJobs()
+            return self.server.trial_jobs
+
+    def production_post(self, action):
+        from urllib.parse import urlsplit
+        origin = self.headers.get('Origin')
+        if origin and urlsplit(origin).netloc != self.headers.get('Host'):
+            return self._json({'error':'Cross-origin write rejected'},403)
+        try:
+            length = int(self.headers.get('Content-Length',0))
+            if not 0 < length <= 20000000:
+                raise ValueError('请求大小无效')
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body,dict):
+                raise ValueError('请求必须为对象')
+            if action == 'trial':
+                return self._json({'job':self.production_jobs().start(read_state(self.server.config_path),body)})
+            if action == 'cancel':
+                return self._json({'job':self.production_jobs().cancel(body.get('id'))})
+            if action == 'adopt':
+                plan = self.production_jobs().plan(body.get('id'))
+                return self._json(production_adopt(self.server.config_path,plan,body.get('reason','')))
+            if action == 'archive':
+                return self._json(archive_production(self.server.config_path,self.production_jobs().plan(body.get('id'))))
+            return self._json(production_update(self.server.config_path,action,body))
+        except Exception as error:
+            return self._json(error_response(error),400)
 
     def persist_config(self, cfg):
         fd, temp = tempfile.mkstemp(dir=os.path.dirname(self.server.config_path), suffix='.tmp')
@@ -214,6 +256,15 @@ def main():
     port = args.port or cfg.get('server', {}).get('port', 8080)
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.config_path = os.path.abspath(args.config)
+    stop_checks = threading.Event()
+    def check_loop():
+        while not stop_checks.is_set():
+            try:
+                daily_check(httpd.config_path)
+            except Exception:
+                traceback.print_exc()
+            stop_checks.wait(30)
+    threading.Thread(target=check_loop,daemon=True).start()
     print('Testing scheduling demo')
     print('  config: %s' % httpd.config_path)
     print('  open:   http://127.0.0.1:%d' % port)
@@ -221,6 +272,11 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        stop_checks.set()
+        if hasattr(httpd,'trial_jobs'):
+            httpd.trial_jobs.close()
+        httpd.server_close()
 
 
 if __name__ == '__main__':

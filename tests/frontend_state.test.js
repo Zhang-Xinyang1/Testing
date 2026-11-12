@@ -741,3 +741,64 @@ test('scheduling a different month resets an out-of-range Gantt anchor', async (
   await running;
   assert.equal(env.app.state.gantt.anchor, start);
 });
+
+function productionEnvironment(snapshot) {
+  const env=environment(), nodes={}, listeners={}, requests=[];
+  env.app.$=id=>nodes[id]||(nodes[id]={});
+  env.app.state.view='production';
+  env.context.document={addEventListener(type,fn){listeners[type]=fn;}};
+  env.context.setTimeout=()=>1; env.context.clearTimeout=()=>{};
+  const state={snapshot,active:null,history:[],events:[],rules:{recipeChangeMinutes:30,freezeHours:0},changePending:false};
+  env.context.fetch=async (url, options)=>{
+    requests.push({url,options});
+    return {ok:true,json:async()=>url.endsWith('/job')?{job:null}:state};
+  };
+  vm.runInContext(env.read('production.js'),env.context);
+  env.app.navigate=view=>{env.app.state.view=view;env.app.renderProduction();};
+  const action=name=>listeners.click({target:{closest:s=>s==='[data-prod-action]'?{dataset:{prodAction:name}}:null}});
+  return {...env,nodes,listeners,requests,workspace:state,action};
+}
+
+test('empty production workspace reads only, exposes MES reception and uses its own source labels', async()=>{
+  const env=productionEnvironment(null);
+  await env.action('refresh');
+  assert.deepEqual(env.requests.map(r=>r.url),['/api/production','/api/production/job']);
+  assert.ok(env.requests.every(r=>!r.options.method));
+  assert.match(env.nodes['#view-production'].innerHTML,/校验并接收快照/);
+  assert.equal(env.nodes['#source-name'].textContent,'等待生产数据');
+  assert.equal(env.nodes['#btn-import'].hidden,true);
+  assert.equal(env.pending.length,0);
+});
+
+test('production rule draft survives navigation and prevents scheduling with unsaved values', async()=>{
+  const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',lots:[],demands:[],equipment:[]});
+  await env.action('refresh');
+  env.listeners.input({target:{id:'prod-rule-recipeChangeMinutes',type:'number',value:'12',dataset:{}}});
+  env.app.openProductionSettings();
+  assert.match(env.nodes['#view-replanning'].innerHTML,/id="prod-rule-recipeChangeMinutes"[^>]*value="12"/);
+  env.app.startProductionTrial();
+  await env.action('trial');
+  assert.equal(env.requests.length,2);
+  assert.match(env.nodes['#view-replanning'].innerHTML,/请先保存生产规则/);
+});
+
+test('new facts update actual KPI while the selected forecast remains clearly marked as stale', async()=>{
+  const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',demands:[{ppn:'P',wafer:100}],lots:[{ppn:'P',state:'DONE',wafer:25,actualComplete:'2026-11-11'}]});
+  env.workspace.active={products:[{ppn:'P',target:100,actual:0,forecast:50}],alerts:[]};
+  env.workspace.changePending=true;
+  await env.action('refresh');
+  assert.match(env.nodes['#view-production'].innerHTML,/实际完成<\/span><strong>25<\/strong>/);
+  assert.match(env.nodes['#view-production'].innerHTML,/上方实际完成来自最新快照/);
+  assert.match(env.nodes['#view-production'].innerHTML,/方案预计完成<\/span><strong>50<\/strong>/);
+});
+
+test('future completion does not masquerade as an active rest countdown', async()=>{
+  const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',demands:[{ppn:'P',wafer:25}],lots:[{uid:'L1',lotId:'L1',ppn:'P',wafer:25,state:'READY'}]});
+  env.workspace.active={products:[],alerts:[],lots:[{uid:'L1',complete:env.app.SCHED.parseDate('2026-11-13'),tasks:[]}]};
+  let drawer='';env.app.openDrawer=(k,t,html)=>{drawer=html;};
+  await env.action('refresh');
+  await env.listeners.click({target:{closest:s=>s==='[data-prod-lot]'?{dataset:{prodLot:'L1'}}:null}});
+  assert.match(drawer,/尚未确认开始，待最后加工实际完成/);
+  assert.match(drawer,/预计静置结束/);
+  assert.doesNotMatch(drawer,/剩余 \d/);
+});

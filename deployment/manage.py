@@ -23,11 +23,14 @@ LOG = STATE / 'server.log'
 SERVER = BACKEND / 'server.py'
 REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py',
                     'scheduler.py', 'optimizer.py', 'platforms.py', 'input_rules.py',
-                    'input_errors.py', 'schedule_history.py', 'task_overrides.py')
+                    'input_errors.py', 'schedule_history.py', 'task_overrides.py',
+                    'production.py', 'production_rules.py', 'production_demo.py', 'production_jobs.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',
     'assets/enterprise.css',
+    'assets/production.css',
+    'assets/js/production.js',
     'assets/data.js',
     'assets/data-loader.js',
     'assets/schedule-client.js',

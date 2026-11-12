@@ -7,6 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6bff'/%3E%3Cpath d='M9 10h9M9 16h14M9 22h6' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="assets/styles.css">
   <link rel="stylesheet" href="assets/enterprise.css">
+  <link rel="stylesheet" href="assets/production.css">
   <script>
     window.addEventListener('error', function (e) {
       document.title = 'JS ERROR: ' + e.message;
@@ -27,6 +28,7 @@
       <span class="brand-logo-window"><img class="brand-logo" src="assets/brand/xmc-logo-official.png" width="2865" height="456" alt="XMC"></span>
     </div>
     <nav class="nav" id="nav">
+      <div class="nav-group-label">Excel 排程</div>
       <button class="nav-item active" data-view="mps">
         <span class="nav-ico" data-icon="target"></span><span>MPS 结果</span>
       </button>
@@ -38,6 +40,10 @@
       </button>
       <button class="nav-item" data-view="diagnostics"><span class="nav-ico">◎</span><span>排产诊断</span></button>
       <button class="nav-item" data-view="history"><span class="nav-ico">↶</span><span>方案历史</span></button>
+      <div class="nav-group-label">生产工作台 · 新流程</div>
+      <button class="nav-item" data-view="production"><span class="nav-ico">◫</span><span>生产看板</span></button>
+      <button class="nav-item" data-view="tracking"><span class="nav-ico">⌕</span><span>Lot 查询</span></button>
+      <button class="nav-item" data-view="replanning"><span class="nav-ico">↻</span><span>滚动重排</span></button>
     </nav>
     <div class="sidebar-foot">
       <div class="source-card">
@@ -71,6 +77,9 @@
       <section class="view" id="view-inputs"></section>
       <section class="view" id="view-diagnostics"></section>
       <section class="view" id="view-history"></section>
+      <section class="view" id="view-production"></section>
+      <section class="view" id="view-tracking"></section>
+      <section class="view" id="view-replanning"></section>
     </main>
   </div>
 </div>
@@ -126,5 +135,6 @@
 <script src="assets/js/adjustments.js"></script>
 <script src="assets/js/inputs.js"></script>
 <script src="assets/js/ui.js"></script>
+<script src="assets/js/production.js"></script>
 </body>
 </html>
