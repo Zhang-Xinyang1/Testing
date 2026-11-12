@@ -1,0 +1,432 @@
+{
+  "time": "2026-11-12T13:34:00.160928+08:00",
+  "synthetic": true,
+  "scenarios": [
+    {
+      "key": "full",
+      "title": "综合生产 · 72 Lot",
+      "lots": 72,
+      "wafers": 1440,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.5,
+      "evaluations": 20,
+      "audit": {
+        "tasks": 161,
+        "resources": 16,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 1300,
+      "alerts": 14
+    },
+    {
+      "key": "basic",
+      "title": "快速入门 · 12 Lot",
+      "lots": 12,
+      "wafers": 300,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.3,
+      "evaluations": 18,
+      "audit": {
+        "tasks": 24,
+        "resources": 6,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 225,
+      "alerts": 7
+    },
+    {
+      "key": "recipe",
+      "title": "借机与 35 分钟切换",
+      "lots": 3,
+      "wafers": 75,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.2,
+      "evaluations": 16,
+      "audit": {
+        "tasks": 3,
+        "resources": 1,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 75,
+      "alerts": 2
+    },
+    {
+      "key": "paired_pm",
+      "title": "EQP / Prober 组合维护",
+      "lots": 12,
+      "wafers": 300,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.3,
+      "evaluations": 18,
+      "audit": {
+        "tasks": 24,
+        "resources": 6,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 225,
+      "alerts": 7
+    },
+    {
+      "key": "month_end",
+      "title": "月末边界与静置",
+      "lots": 4,
+      "wafers": 100,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.2,
+      "evaluations": 15,
+      "audit": {
+        "tasks": 3,
+        "resources": 1,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 50,
+      "alerts": 1
+    },
+    {
+      "key": "capacity",
+      "title": "产能缺口与扩产 · 120 Lot",
+      "lots": 120,
+      "wafers": 3000,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.5,
+      "evaluations": 20,
+      "audit": {
+        "tasks": 120,
+        "resources": 2,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 550,
+      "alerts": 117
+    },
+    {
+      "key": "freeze",
+      "title": "冻结与滚动比较",
+      "lots": 12,
+      "wafers": 300,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.3,
+      "evaluations": 18,
+      "audit": {
+        "tasks": 24,
+        "resources": 6,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 225,
+      "alerts": 7
+    },
+    {
+      "key": "identity",
+      "title": "重复 LotID / 标识待确认",
+      "lots": 12,
+      "wafers": 300,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 0.3,
+      "evaluations": 18,
+      "audit": {
+        "tasks": 24,
+        "resources": 6,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 225,
+      "alerts": 7
+    },
+    {
+      "key": "scale500",
+      "title": "规模验证 · 500 Lot",
+      "lots": 500,
+      "wafers": 9690,
+      "passed": true,
+      "status": "completed",
+      "elapsed": 7.4,
+      "evaluations": 20,
+      "audit": {
+        "tasks": 1303,
+        "resources": 16,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 9550,
+      "alerts": 307
+    },
+    {
+      "key": "timeout2000",
+      "title": "超时与取消 · 2000 Lot",
+      "lots": 2000,
+      "wafers": 38600,
+      "passed": true,
+      "status": "timed_out",
+      "elapsed": 2.0,
+      "evaluations": 1,
+      "audit": {
+        "tasks": 5303,
+        "resources": 16,
+        "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
+      },
+      "forecast": 15555,
+      "alerts": 1965
+    }
+  ],
+  "workflows": [
+    {
+      "name": "实际资源与扩产独立比较",
+      "passed": true,
+      "detail": {
+        "before": 550,
+        "after": 1100,
+        "delta": 550
+      }
+    },
+    {
+      "name": "已选基线与整 Lot / BAKE 批次冻结",
+      "passed": true,
+      "detail": {
+        "frozenLots": 4
+      }
+    },
+    {
+      "name": "未知来料 → 明确 24 小时后到货",
+      "passed": true,
+      "detail": {
+        "reason": "演示：Fab 确认可用时间为快照后 24 小时 · DEMO04-L0003 / FULL-0003",
+        "changedLots": 62,
+        "forecastDelta": 25
+      }
+    },
+    {
+      "name": "已知来料 → 延迟 48 小时",
+      "passed": true,
+      "detail": {
+        "reason": "演示：已知来料时间延迟 48 小时 · DEMO03-L0002 / FULL-0002",
+        "changedLots": 60,
+        "forecastDelta": 0
+      }
+    },
+    {
+      "name": "一个待排 Lot → 2 小时后交期",
+      "passed": true,
+      "detail": {
+        "reason": "演示：内部出货日提前至快照后 2 小时 · DEMO01-L0006 / FULL-0006",
+        "changedLots": 59,
+        "forecastDelta": 0
+      }
+    },
+    {
+      "name": "空闲 CP → 停机 12 小时",
+      "passed": true,
+      "detail": {
+        "reason": "演示：DEMO-K80-02 故障停机 12 小时",
+        "changedLots": 59,
+        "forecastDelta": 0
+      }
+    },
+    {
+      "name": "在制 Lot → 补充外部完工预测",
+      "passed": true,
+      "detail": {
+        "reason": "演示：外部系统补充最终加工完工预测，不生成后续任务 · DEMO02-L0001 / FULL-0001",
+        "changedLots": 1,
+        "forecastDelta": 25
+      }
+    },
+    {
+      "name": "HOLD → 放行并立即可用",
+      "passed": true,
+      "detail": {
+        "reason": "演示：品质确认放行，物料立即可用 · DEMO05-L0004 / FULL-0004",
+        "changedLots": 62,
+        "forecastDelta": 25
+      }
+    },
+    {
+      "name": "可配置 Recipe 切换耗时",
+      "passed": true,
+      "detail": "30 改为 15 后，首工序切换从 35 分钟变为 20 分钟"
+    },
+    {
+      "name": "主动取消后台试排",
+      "passed": true,
+      "detail": {
+        "status": "cancelled",
+        "elapsed": 0.3
+      }
+    },
+    {
+      "name": "保存、恢复、选用及旧候选保护",
+      "passed": true,
+      "detail": "比较记录、选用说明与快照可恢复；过期候选拒绝选用"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "checks": [
+      {
+        "key": "repeated_type",
+        "title": "同一 TYPE 多台设备应通过",
+        "expected": "accept",
+        "accepted": true,
+        "passed": true,
+        "message": "输入检查通过；未保存、未执行排产"
+      },
+      {
+        "key": "duplicate_display",
+        "title": "显示 LotID 重复但 uid 不同应通过",
+        "expected": "accept",
+        "accepted": true,
+        "passed": true,
+        "message": "输入检查通过；未保存、未执行排产"
+      },
+      {
+        "key": "mixed_case",
+        "title": "Platform 大小写、分隔符空白应通过",
+        "expected": "accept",
+        "accepted": true,
+        "passed": true,
+        "message": "输入检查通过；未保存、未执行排产"
+      },
+      {
+        "key": "unknown_eta",
+        "title": "未来来料日期未知允许展示但不排产",
+        "expected": "accept",
+        "accepted": true,
+        "passed": true,
+        "message": "输入检查通过；未保存、未执行排产"
+      },
+      {
+        "key": "duplicate_uid",
+        "title": "稳定批次 uid 重复应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "Lot uid 重复：DEMO-LOT-005"
+      },
+      {
+        "key": "missing_uid",
+        "title": "稳定标识模式缺少 uid 应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "稳定标识模式下每个 Lot 都必须提供 uid"
+      },
+      {
+        "key": "bad_platform",
+        "title": "Platform 无匹配 TYPE 应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "Lot Platform 未匹配设备 TYPE：DEMO01-L000"
+      },
+      {
+        "key": "bad_date",
+        "title": "无效出货日期应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "内部计划出货日 日期无效"
+      },
+      {
+        "key": "bad_month",
+        "title": "无效月份应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "计划月份无效，须为有效的 YYYY-MM"
+      },
+      {
+        "key": "missing_route",
+        "title": "产品缺少路线应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "产品缺少路线：DEMO01"
+      },
+      {
+        "key": "zero_wafer",
+        "title": "0 片 Lot 应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "Lot wafer 必须为规定范围内的整数"
+      },
+      {
+        "key": "large_lot",
+        "title": "单 Lot 超过 25 片应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "Lot wafer 必须为规定范围内的整数"
+      },
+      {
+        "key": "bad_pm",
+        "title": "PM 引用未知对象应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "计划引用未知或不适用机台：UNKNOWN-EQP；PM 可填写 EQPID 或 proberID，请核对有效 EQP 的对应关系及手工机台覆盖配置"
+      },
+      {
+        "key": "bad_borrow",
+        "title": "借机缺少要求 Recipe 应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "借机需要有效 CP 机台和要求 Recipe"
+      },
+      {
+        "key": "duplicate_eqp",
+        "title": "设备编号重复应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "设备编号和 TYPE 必填，设备编号须唯一"
+      },
+      {
+        "key": "ready_future",
+        "title": "已到位但可用时间在未来应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "已到位 Lot 的可用时间必须不晚于快照时点"
+      },
+      {
+        "key": "rest_route",
+        "title": "不能把静置填成加工等待应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "生产快照只接收 CP/BAKE 加工工序；静置由完工时间单独计算：QTIME1"
+      },
+      {
+        "key": "bad_wip_object",
+        "title": "在制当前占用格式错误应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "在制 current 必须为当前工序占用对象"
+      },
+      {
+        "key": "wip_overlap",
+        "title": "同 CP 重复在制占用应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "冻结、外部占用或在制时间冲突：CP-A-01"
+      },
+      {
+        "key": "bad_chamber",
+        "title": "BAKE 在制腔体越界应拒绝",
+        "expected": "reject",
+        "accepted": false,
+        "passed": true,
+        "message": "BAKE 在制需要有效腔体编号"
+      }
+    ]
+  },
+  "passed": true
+}

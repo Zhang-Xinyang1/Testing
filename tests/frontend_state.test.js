@@ -751,7 +751,7 @@ function productionEnvironment(snapshot) {
   const state={snapshot,active:null,history:[],events:[],rules:{recipeChangeMinutes:30,freezeHours:0},changePending:false};
   env.context.fetch=async (url, options)=>{
     requests.push({url,options});
-    return {ok:true,json:async()=>url.endsWith('/job')?{job:null}:state};
+    return {ok:true,json:async()=>url.endsWith('/job')?{job:null}:url.endsWith('/demo-catalog')?{scenarios:[],events:[]}:state};
   };
   vm.runInContext(env.read('production.js'),env.context);
   env.app.navigate=view=>{env.app.state.view=view;env.app.renderProduction();};
@@ -762,7 +762,7 @@ function productionEnvironment(snapshot) {
 test('empty production workspace reads only, exposes MES reception and uses its own source labels', async()=>{
   const env=productionEnvironment(null);
   await env.action('refresh');
-  assert.deepEqual(env.requests.map(r=>r.url),['/api/production','/api/production/job']);
+  assert.deepEqual(env.requests.map(r=>r.url),['/api/production','/api/production/job','/api/production/demo-catalog']);
   assert.ok(env.requests.every(r=>!r.options.method));
   assert.match(env.nodes['#view-production'].innerHTML,/校验并接收快照/);
   assert.equal(env.nodes['#source-name'].textContent,'等待生产数据');
@@ -778,7 +778,7 @@ test('production rule draft survives navigation and prevents scheduling with uns
   assert.match(env.nodes['#view-replanning'].innerHTML,/id="prod-rule-recipeChangeMinutes"[^>]*value="12"/);
   env.app.startProductionTrial();
   await env.action('trial');
-  assert.equal(env.requests.length,2);
+  assert.equal(env.requests.length,3);
   assert.match(env.nodes['#view-replanning'].innerHTML,/请先保存生产规则/);
 });
 
@@ -801,4 +801,42 @@ test('future completion does not masquerade as an active rest countdown', async(
   assert.match(drawer,/尚未确认开始，待最后加工实际完成/);
   assert.match(drawer,/预计静置结束/);
   assert.doesNotMatch(drawer,/剩余 \d/);
+});
+
+test('built-in scenario selection sends only a key and never starts a trial automatically', async()=>{
+  const env=productionEnvironment(null),requests=[];
+  const scenario={key:'capacity',title:'产能缺口',description:'自动生成',checks:['检查缺口'],suggestedExpansion:{K8000L:2}};
+  env.context.fetch=async(url,options)=>{
+    requests.push({url,options});
+    if(url.endsWith('/demo'))env.workspace.snapshot={source:'demo',month:'2026-11',asOf:'2026-11-29',demoCase:scenario,lots:[],demands:[],equipment:[]};
+    return {ok:true,json:async()=>url.endsWith('/job')?{job:null}:url.endsWith('/demo-catalog')?{scenarios:[scenario],events:[]}:env.workspace};
+  };
+  await env.action('refresh');
+  env.listeners.change({target:{id:'prod-demo-case',value:'capacity'}});
+  await env.action('demo');
+  assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body),{case:'capacity'});
+  assert.match(env.nodes['#view-production'].innerHTML,/当前已载入：产能缺口/);
+  assert.equal(env.pending.length,0);
+});
+
+test('one-click change requires no date, lot or reason typed by the user', async()=>{
+  const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12',lots:[],demands:[],equipment:[]});
+  await env.action('refresh');
+  env.listeners.change({target:{id:'prod-demo-event',value:'release_hold'}});
+  await env.action('demo-event');
+  const request=env.requests.at(-1);
+  assert.equal(request.url,'/api/production/demo-event');
+  assert.deepEqual(JSON.parse(request.options.body),{event:'release_hold'});
+});
+
+test('input self-check distinguishes expected rejection from a test failure',async()=>{
+  const env=productionEnvironment(null);
+  await env.action('refresh');
+  env.context.fetch=async()=>({ok:true,json:async()=>({passed:true,checks:[{title:'错误日期',expected:'reject',accepted:false,passed:true,message:'日期无效'}]})});
+  await env.action('demo-check');
+  const html=env.nodes['#view-production'].innerHTML;
+  assert.match(html,/1 \/ 1 符合预期/);
+  assert.match(html,/错误日期/);
+  assert.match(html,/不保存样例，不启动排产/);
 });

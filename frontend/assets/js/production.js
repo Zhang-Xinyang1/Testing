@@ -5,6 +5,7 @@
   var state = null, job = null, loading = false, busy = false, failure = '', poll = null;
   var tab = 'trial', query = '', status = 'all', product = 'all', page = 1;
   var scene = 'actual', extras = {}, reason = '', draftRules = null, snapshotDraft = '';
+  var demoCatalog={scenarios:[],events:[]}, demoChoice='full', presetChoice='arrival_known', validationReport=null;
   var stateNames = {READY:'已到位',FUTURE:'预计来料',HOLD:'HOLD',RUNNING:'在制 · 外部接续',DONE:'实际完工'};
   var views = {production:['生产看板','实际完成、预测产出与交期风险'],
     tracking:['Lot 查询','当前位置、跨机台路线与静置信息'],
@@ -35,8 +36,12 @@
     if (loading) return;
     loading = true;
     try {
-      var results = await Promise.all([request(''),request('/job')]);
-      state=results[0]; job=results[1].job; failure='';
+      var results = await Promise.all([request(''),request('/job'),request('/demo-catalog')]);
+      state=results[0]; job=results[1].job; demoCatalog=results[2]; failure='';
+      if(state.snapshot&&state.snapshot.demoCase){
+        demoChoice=state.snapshot.demoCase.key;
+        if(!Object.keys(extras).length)extras=Object.assign({},state.snapshot.demoCase.suggestedExpansion||{});
+      }
       if (job && job.status === 'running') schedulePoll();
     } catch(error) { failure=error.message; }
     finally { loading=false; render(); }
@@ -55,10 +60,20 @@
   }
   function header() {
     var d=state && state.snapshot;
-    return '<div class="source-hero"><div><div class="source-title">'+(d?(d.source==='demo'?'模拟生产数据':'MES 接收快照'):'等待生产数据')+'</div><div class="source-sub">'+(d?esc(d.month)+' · 数据时点 '+fmt(d.asOf)+' · '+d.lots.length+' Lot':'可先载入模拟数据，验证完整操作流程。')+'</div></div><div class="source-actions">'+btn('refresh','刷新状态')+(!d||d.source==='demo'?btn('demo',d?'重置演示数据':'载入演示数据','primary'):'')+'</div></div>'+
+    return '<div class="source-hero"><div><div class="source-title">'+(d?(d.source==='demo'?'模拟生产数据':'MES 接收快照'):'等待生产数据')+'</div><div class="source-sub">'+(d?esc(d.month)+' · 数据时点 '+fmt(d.asOf)+' · '+d.lots.length+' Lot':'可先载入模拟数据，验证完整操作流程。')+'</div></div><div class="source-actions">'+btn('refresh','刷新状态')+'</div></div>'+
       (d?'<div class="note-card '+(d.source==='demo'?'prod-demo':'')+'">'+(d.source==='demo'?'演示模式：全部为合成数据，选用仅保存在独立演示工作区。':'当前使用已接收的 MES 快照；尚未配置 MES 主动拉取。')+' '+(!d.identityStable?'批次稳定标识待确认，跨快照冻结与替换计划受限。':'批次使用本数据源提供的稳定标识。')+'</div>':'')+
-      (failure?'<div class="error-box" role="alert">'+esc(failure)+'</div>':'');
+      (failure?'<div class="error-box" role="alert">'+esc(failure)+'</div>':'')+
+      ((!d||d.source==='demo')&&A.state.view!=='tracking'?demoHTML():'');
   }
+  function demoHTML(){
+    var selected=demoCatalog.scenarios.find(function(c){return c.key===demoChoice;});
+    var active=state&&state.snapshot&&state.snapshot.demoCase;
+    return '<div class="card prod-demo-tools"><div class="card-head"><h3>内置演示场景</h3><span class="pill">全部为合成数据</span></div><div class="card-body"><div class="prod-toolbar"><label class="config-field">选择演示场景<select id="prod-demo-case" class="select">'+demoCatalog.scenarios.map(function(c){return '<option value="'+esc(c.key)+'"'+(demoChoice===c.key?' selected':'')+'>'+esc(c.title)+'</option>';}).join('')+'</select></label>'+btn('demo','载入所选场景','primary')+btn('demo-check','输入样例自检')+'</div>'+
+      '<p>'+esc(selected?selected.description:'正在读取演示目录…')+'</p>'+(selected?'<ul class="prod-checklist">'+selected.checks.map(function(c){return '<li>'+esc(c)+'</li>';}).join('')+'</ul>':'')+
+      '<p class="config-hint">载入后应用该场景的演示规则、清空当前选用状态，保留历史记录；不会自动排产。'+(active?'当前已载入：'+esc(active.title)+'。':'')+'</p>'+
+      (validationReport?'<details open class="config-details"><summary>输入自检：'+validationReport.checks.filter(function(c){return c.passed;}).length+' / '+validationReport.checks.length+' 符合预期</summary><p>使用真实输入校验器检查内置样例；不保存样例，不启动排产。拒绝错误数据属于预期通过。</p>'+table(['样例','预期','实际','核对','说明'],validationReport.checks.map(function(c){return '<tr>'+[c.title,c.expected==='accept'?'允许':'拒绝',c.accepted?'允许':'拒绝',c.passed?'符合预期':'需要修复',c.message].map(cell).join('')+'</tr>';}))+'</details>':'')+'</div></div>';
+  }
+  function adoptReason(){return reason||(state&&state.snapshot&&state.snapshot.source==='demo'?'演示测试：'+((state.snapshot.demoCase||{}).title||'当前模拟场景')+'，人工选用':'');}
   function projectedRows() {
     var d=state.snapshot, start=S.parseDate(d.month+'-01'), end=S.parseDate(nextMonth(d.month));
     return d.demands.map(function (p) {
@@ -89,7 +104,7 @@
     var d=state.snapshot, rows=allLots().filter(function(l){return (status==='all'||l.state===status)&&(product==='all'||l.ppn===product)&&(!query||(l.lotId+' '+l.uid+' '+l.ppn).toLowerCase().includes(query.toLowerCase()));});
     var pages=Math.max(1,Math.ceil(rows.length/30)); page=Math.min(page,pages);
     return '<div class="card"><div class="card-body"><div class="prod-toolbar">'+input('prod-search','搜索 Lot / PPN / 编号',query)+
-      '<label class="config-field">状态<select id="prod-state" class="select"><option value="all">全部状态</option>'+Object.keys(stateNames).map(function(k){return '<option value="'+k+'"'+(status===k?' selected':'')+'>'+stateNames[k]+'</option>';}).join('')+'</select></label><label class="config-field">产品<select id="prod-product" class="select"><option value="all">全部产品</option>'+d.demands.map(function(p){return '<option'+(product===p.ppn?' selected':'')+'>'+esc(p.ppn)+'</option>';}).join('')+'</select></label>'+btn('search','查询')+'</div><p class="config-hint">实际位置来自快照；任务路线来自已选方案。静置倒计时以快照时点为准。'+(state.changePending?'输入已变化，已有计划可能需要更新。':'')+'</p>'+table(['LotID','PPN / wafer','状态','实际位置','可用时间','内部出货日','计划完工','操作'],rows.slice((page-1)*30,page*30).map(function(l){return '<tr><td>'+lotLink(l)+'</td>'+cell(l.ppn+' / '+l.wafer)+cell(stateNames[l.state])+cell(l.location||'待提供')+cell(fmt(l.availableAt))+cell(fmt(l.shipDue))+cell(fmt(l.plannedComplete))+'<td><button class="prod-link" data-prod-lot="'+esc(l.uid)+'">路线与静置</button></td></tr>';}))+'<div class="prod-pagination">'+btn('prev','上一页')+'<span>第 '+page+' / '+pages+' 页 · '+rows.length+' 条</span>'+btn('next','下一页')+'</div></div></div>';
+      '<label class="config-field">状态<select id="prod-state" class="select"><option value="all">全部状态</option>'+Object.keys(stateNames).map(function(k){return '<option value="'+k+'"'+(status===k?' selected':'')+'>'+stateNames[k]+'</option>';}).join('')+'</select></label><label class="config-field">产品<select id="prod-product" class="select"><option value="all">全部产品</option>'+d.demands.map(function(p){return '<option'+(product===p.ppn?' selected':'')+'>'+esc(p.ppn)+'</option>';}).join('')+'</select></label>'+btn('search','查询')+'</div><p class="config-hint">实际位置来自快照；任务路线来自已选方案。静置倒计时以快照时点为准。'+(state.changePending?'输入已变化，已有计划可能需要更新。':'')+'</p>'+table(['LotID','PPN / wafer','状态','实际位置','可用时间','内部出货日','计划完工','操作'],rows.slice((page-1)*30,page*30).map(function(l){return '<tr><td>'+lotLink(l)+'<small class="prod-uid">'+esc(l.uid)+'</small></td>'+cell(l.ppn+' / '+l.wafer)+cell(stateNames[l.state])+cell(l.location||'待提供')+cell(fmt(l.availableAt))+cell(fmt(l.shipDue))+cell(fmt(l.plannedComplete))+'<td><button class="prod-link" data-prod-lot="'+esc(l.uid)+'">路线与静置</button></td></tr>';}))+'<div class="prod-pagination">'+btn('prev','上一页')+'<span>第 '+page+' / '+pages+' 页 · '+rows.length+' 条</span>'+btn('next','下一页')+'</div></div></div>';
   }
   function openLot(uid) {
     var lot=allLots().find(function(l){return l.uid===uid;}); if(!lot)return;
@@ -115,8 +130,9 @@
       '<h3>任务影响 · '+plan.changes.length+' 个 Lot</h3>'+(!plan.identityStable?'<p class="workflow-error">批次稳定标识待确认，无法可靠逐 Lot 对比。</p>':'')+
       table(['Lot','变化','原完工','新完工'],plan.changes.map(function(c){return '<tr>'+[c.lotId,c.kind,fmt(c.before),fmt(c.after)].map(cell).join('')+'</tr>';}))+
       '<h3>借机开始时 Recipe 检查</h3>'+table(['机台','借机开始','要求 Recipe','当时 Recipe','检查'],plan.borrows.map(function(b){return '<tr>'+[b.eqp,fmt(b.start),b.requiredRecipe||b.req.recipe,b.recipeAtStart||'未取得',b.recipeMatched?'匹配':b.reason||'未匹配'].map(cell).join('')+'</tr>';}))+
+      '<details class="config-details"><summary>PM 原始维护与组合停机 · '+(plan.pm||[]).length+' 段</summary>'+table(['原始维护对象','组合 EQP','组合 Prober','停机开始','停机结束','合并说明'],(plan.pm||[]).map(function(p){return '<tr>'+[(p.sourcePlans||[]).map(function(s){return s.eqp+' ('+s.targetKind+')';}).join('、'),(p.affectedEqps||[]).join('、'),(p.affectedProbers||[]).join('、'),fmt(p.start),fmt(p.end),p.merged?'重叠停机合并，各项维护保留':'独立停机'].map(cell).join('')+'</tr>';}))+'</details>'+
       '<details class="config-details"><summary>查看候选任务时间与资源</summary>'+table(['Lot','工序','资源','占用开始','任务开始','Lot 放行','资源释放'],plan.lots.flatMap(function(l){return l.tasks.map(function(t){return '<tr>'+[l.lotId,t.step,t.machine||t.chamber||'等待',fmt(t.blockStart||t.start),fmt(t.start),fmt(t.end),fmt(t.resourceEnd||t.end)].map(cell).join('')+'</tr>'; }); }))+'</details>'+
-      (historical?'<p class="note-card">历史只读记录，不会覆盖当前方案。</p>':adopted?'<p class="note-card">此方案已经选用，当前未接入 MES 下发。</p>':btn('archive','保存比较记录')+(stale?'<p class="workflow-error">数据、规则或已选方案已变化，此候选仅供查看，请重新试排。</p>':plan.scenario==='actual'?'<div class="prod-toolbar">'+input('prod-adopt-reason','选用说明',reason)+btn('adopt','选用此方案','primary')+'</div><p class="config-hint">选用保存至本程序；当前未接入 MES 下发。</p>':'<p class="note-card">这是扩产假设结果，不能选为实际资源计划。</p>'))+'</div></div>';
+      (historical?'<p class="note-card">历史只读记录，不会覆盖当前方案。</p>':job&&job.status==='running'?'<p class="note-card">仍在计算，当前候选仅供查看；完成或取消后可保存和选用。</p>':adopted?'<p class="note-card">此方案已经选用，当前未接入 MES 下发。</p>':btn('archive','保存比较记录')+(stale?'<p class="workflow-error">数据、规则或已选方案已变化，此候选仅供查看，请重新试排。</p>':plan.scenario==='actual'?'<div class="prod-toolbar">'+input('prod-adopt-reason','选用说明',adoptReason())+btn('adopt','选用此方案','primary')+'</div><p class="config-hint">演示已预填说明，仍由你点击选用；现场方案需填写实际原因。选用保存至本程序，当前未接入 MES 下发。</p>':'<p class="note-card">这是扩产假设结果，不能选为实际资源计划。</p>'))+'</div></div>';
   }
   function trialHTML() {
     var d=state.snapshot, types=Array.from(new Set(d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return e.type;})));
@@ -124,8 +140,9 @@
   }
   function eventsHTML() {
     var d=state.snapshot;
-    return '<div class="card"><div class="card-head"><h3>数据与规则变化记录</h3></div><div class="card-body">'+table(['时间','类型','已知原因'],state.events.map(function(e){return '<tr>'+[fmt(e.time),e.kind,e.reason].map(cell).join('')+'</tr>';}))+'<p class="config-hint">记录事件事实；多种变化同时发生时，不将全部产出差额直接归因于某一事件。</p></div></div>'+
-      (d.source==='demo'?'<div class="card"><div class="card-head"><h3>模拟生产变化</h3></div><div class="card-body"><div class="config-grid"><label class="config-field">事件<select class="select" id="prod-event-kind"><option value="arrival">来料时间变化</option><option value="due">内部出货日变化</option><option value="down">设备停机</option></select></label><label class="config-field">Lot<select id="prod-event-lot" class="select">'+d.lots.filter(function(l){return ['READY','FUTURE'].includes(l.state);}).map(function(l){return '<option value="'+esc(l.uid)+'">'+esc(l.lotId)+'</option>';}).join('')+'</select></label><label class="config-field">设备（停机事件）<select id="prod-event-eqp" class="select">'+d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return '<option>'+esc(e.id)+'</option>';}).join('')+'</select></label>'+input('prod-event-time','新的可用/出货时间；停机填写结束时间',dateValue(d.asOf),'datetime-local')+input('prod-event-reason','变更原因','')+'</div>'+btn('event','保存模拟变化')+'</div></div>':'');
+    return (d.source==='demo'?'<div class="card"><div class="card-head"><h3>一键生产变化</h3></div><div class="card-body"><div class="prod-toolbar"><label class="config-field">选择变化样例<select id="prod-demo-event" class="select">'+demoCatalog.events.map(function(e){return '<option value="'+esc(e.key)+'"'+(presetChoice===e.key?' selected':'')+'>'+esc(e.title)+'</option>';}).join('')+'</select></label>'+btn('demo-event','应用此变化','primary')+'</div><p class="config-hint">自动选取合适 Lot / 设备，生成时间和原因。建议先选用基线方案，再应用变化并重新试排；每种变化每次载入只能应用一次。</p></div></div>':'')+
+      '<div class="card"><div class="card-head"><h3>数据与规则变化记录</h3></div><div class="card-body">'+table(['时间','类型','已知原因'],state.events.map(function(e){return '<tr>'+[fmt(e.time),e.kind,e.reason].map(cell).join('')+'</tr>';}))+'<p class="config-hint">记录事件事实；多种变化同时发生时，不将全部产出差额直接归因于某一事件。</p></div></div>'+
+      (d.source==='demo'?'<details class="config-details"><summary>自定义变化（可选手工填写）</summary><div class="card"><div class="card-head"><h3>模拟生产变化</h3></div><div class="card-body"><div class="config-grid"><label class="config-field">事件<select class="select" id="prod-event-kind"><option value="arrival">来料时间变化</option><option value="due">内部出货日变化</option><option value="down">设备停机</option></select></label><label class="config-field">Lot<select id="prod-event-lot" class="select">'+d.lots.filter(function(l){return ['READY','FUTURE'].includes(l.state);}).map(function(l){return '<option value="'+esc(l.uid)+'">'+esc(l.lotId+' · '+l.uid)+'</option>';}).join('')+'</select></label><label class="config-field">设备（停机事件）<select id="prod-event-eqp" class="select">'+d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return '<option>'+esc(e.id)+'</option>';}).join('')+'</select></label>'+input('prod-event-time','新的可用/出货时间；停机填写结束时间',dateValue(d.asOf),'datetime-local')+input('prod-event-reason','变更原因','')+'</div>'+btn('event','保存模拟变化')+'</div></div></details>':'');
   }
   function settingsHTML() {
     var r=draftRules||state.rules;
@@ -149,7 +166,7 @@
     var root=A.$('#view-'+A.state.view); if(!root)return;
     var html=header();
     if(!state)html+='<div class="empty-state">'+(loading?'正在读取生产工作台…':'暂时无法读取，请刷新重试。')+'</div>';
-    else if(!state.snapshot) html+='<div class="empty-state"><b>先验证生产流程</b><p>点击“载入演示数据”，再进入滚动重排；也可在下方接收 MES 完整快照。</p></div>'+settingsHTML();
+    else if(!state.snapshot) html+='<div class="empty-state"><b>先验证生产流程</b><p>选择上方场景并点击“载入所选场景”，再进入滚动重排；也可在下方接收 MES 完整快照。</p></div>'+settingsHTML();
     else html+=A.state.view==='production'?overview():A.state.view==='tracking'?tracking():replan();
     root.innerHTML=html;
   }
@@ -163,7 +180,7 @@
     text('#source-name',d?(d.source==='demo'?'模拟生产快照':'MES 生产快照'):'等待生产数据');
     text('#source-meta',d?d.month+' · '+d.lots.length+' Lot':'使用独立生产工作区');
     text('#source-status',d?'数据时点 '+fmt(d.asOf):'尚未接收快照');
-    text('#source-note',d&&d.source==='demo'?'合成数据，仅用于功能验证':'已接收快照，不主动拉取 MES');
+    text('#source-note',!d?'可载入演示或接收 MES 快照':d.source==='demo'?'合成数据，仅用于功能验证':'已接收快照，不主动拉取 MES');
     text('#run-chip',job&&job.status==='running'?'正在试排':state&&state.changePending?'等待试排与选用':currentPlan()?'已有选用方案':'尚未试排');
   };
   A.renderProduction=function () { render(); if(!state&&!loading)refresh(); };
@@ -178,6 +195,8 @@
     if(event.target.dataset.prodExtra)extras[event.target.dataset.prodExtra]=Number(event.target.value);
   });
   document.addEventListener('change',function(event){
+    if(event.target.id==='prod-demo-case'){demoChoice=event.target.value;render();}
+    if(event.target.id==='prod-demo-event')presetChoice=event.target.value;
     if(event.target.id==='prod-state'){status=event.target.value;page=1;render();}
     if(event.target.id==='prod-product'){product=event.target.value;page=1;render();}
     if(event.target.id==='prod-scenario')scene=event.target.value;
@@ -198,7 +217,12 @@
     if(action==='load-json'){if(!state.snapshot){failure='请先载入演示数据以查看完整示例，或直接粘贴 MES 快照。';}else snapshotDraft=JSON.stringify(state.snapshot,null,2);render();return;}
     busy=true;failure='';
     try {
-      if(action==='demo'){state=await request('/demo',{});job=null;draftRules=null;}
+      if(action==='demo'){
+        state=await request('/demo',{case:demoChoice});job=null;draftRules=null;reason='';scene='actual';tab='trial';snapshotDraft='';validationReport=null;
+        extras=Object.assign({},state.snapshot.demoCase.suggestedExpansion||{});query='';product='all';status='all';page=1;
+      }
+      if(action==='demo-check')validationReport=await request('/demo-check',{});
+      if(action==='demo-event'){state=await request('/demo-event',{event:presetChoice});A.toast('变化已保存，请重新试排比较');}
       if(action==='rules'){state=await request('/rules',draftRules||state.rules);draftRules=null;}
       if(action==='snapshot'){state=await request('/snapshot',JSON.parse(snapshotDraft));}
       if(action==='trial'){
@@ -208,7 +232,7 @@
       if(action==='cancel'){job=(await request('/cancel',{id:job.id})).job;schedulePoll();}
       if(action==='adopt'){
         if(draftRules)throw new Error('有尚未保存的生产规则，请先处理');
-        state=await request('/adopt',{id:job&&job.id,reason:reason});A.toast('方案已选用，已保存在本程序');
+        state=await request('/adopt',{id:job&&job.id,reason:adoptReason()});A.toast('方案已选用，已保存在本程序');
       }
       if(action==='archive'){state=await request('/archive',{id:job&&job.id});A.toast('比较记录已保存');}
       if(action==='event'){

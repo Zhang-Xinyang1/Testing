@@ -380,10 +380,21 @@ def stop():
         return
     if platform.system() == 'Windows':
         # Revalidate creation time immediately before terminating the process.
-        running()
+        if not running():
+            PIDFILE.unlink(missing_ok=True)
+            print('服务已退出。')
+            return
         result = subprocess.run(['taskkill', '/PID', str(record['pid'])], capture_output=True)
         if result.returncode:
-            fail('停止失败，请通过任务管理器核对本应用进程。')
+            # Detached Python has no console window for taskkill's normal close.
+            # Check ownership again before force-closing this app and its workers.
+            if not running():
+                PIDFILE.unlink(missing_ok=True)
+                print('服务已退出。')
+                return
+            result = subprocess.run(['taskkill','/PID',str(record['pid']),'/T','/F'],capture_output=True)
+            if result.returncode and windows_process(record['pid']):
+                fail('停止失败，请通过任务管理器核对本应用进程。')
         for _ in range(20):
             if not windows_process(record['pid']):
                 PIDFILE.unlink(missing_ok=True)

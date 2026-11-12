@@ -68,7 +68,10 @@ def validate_snapshot(raw):
         raise ValueError('snapshotId 必须为非空字符串')
     if not isinstance(d['month'],str) or not re.fullmatch(r'\d{4}-\d{2}',d['month']):
         raise ValueError('计划月份须为 YYYY-MM')
-    first, last = month_bounds(d['month'])
+    try:
+        first, last = month_bounds(d['month'])
+    except (ValueError,OverflowError) as error:
+        raise ValueError('计划月份无效，须为有效的 YYYY-MM') from error
     asof = parse_datetime(d['asOf'])
     if not first <= asof < last:
         raise ValueError('快照时点必须在计划月份内')
@@ -165,6 +168,8 @@ def validate_snapshot(raw):
                 raise ValueError('实际完工不能晚于快照时点')
         if row['state'] == 'RUNNING':
             current = row.get('current') or {}
+            if not isinstance(current,dict):
+                raise ValueError('在制 current 必须为当前工序占用对象')
             for key in ('eqp','recipe','card','chamber','step'):
                 current[key] = identifier(current.get(key))
             if current['eqp'] not in eqps or not date(current.get('start'),'当前工序开始') <= asof < date(current.get('end'),'预计释放'):
@@ -239,12 +244,22 @@ def update(config, action, body):
     with LOCK:
         state = read_state(config)
         if action == 'demo':
-            from production_demo import demo_snapshot
+            from production_demo import scenario_pack
             if state['snapshot'] and state['snapshot']['source'] != 'demo':
                 raise ValueError('当前已接入 MES 快照，演示入口不会覆盖现场数据')
-            state['snapshot'] = validate_snapshot(demo_snapshot())
+            pack=scenario_pack(body.get('case','basic'))
+            state['snapshot'] = validate_snapshot(pack['snapshot'])
+            state['rules'] = pack['rules']
             state['active'] = None
-            record_change(state, '模拟数据', '载入演示快照，等待人工试排')
+            state['lastCheck'] = None
+            record_change(state, '模拟数据', '载入 '+state['snapshot']['demoCase']['title']+'；应用演示规则，等待人工试排')
+        elif action == 'demo-event':
+            from production_demo import demo_event
+            if not state.get('snapshot'):
+                raise ValueError('请先载入演示数据')
+            snapshot,reason=demo_event(state['snapshot'],body.get('event'))
+            state['snapshot']=validate_snapshot(snapshot)
+            record_change(state,'一键模拟变化',reason)
         elif action == 'snapshot':
             snapshot = validate_snapshot(body)
             old = state.get('snapshot')
@@ -268,6 +283,8 @@ def update(config, action, body):
                 raise ValueError('请填写变更原因')
             lot = next((x for x in d['lots'] if x['uid'] == body.get('uid')), None)
             if body.get('kind') in ('arrival','due') and lot:
+                if lot['state'] not in ('READY','FUTURE'):
+                    raise ValueError('来料或交期变化仅适用于待排或未来来料，不能改写已完工、在制或 HOLD 状态')
                 field = 'availableAt' if body['kind'] == 'arrival' else 'shipDue'
                 lot[field] = body.get('time')
                 if field == 'availableAt':
@@ -514,7 +531,10 @@ def archive(config, plan):
     """Persist a candidate for review without changing the active production plan."""
     with LOCK:
         state = read_state(config)
-        _write(folder(config) / (plan['id'] + '.json'), plan)
+        path=folder(config) / (plan['id'] + '.json')
+        # A later "save comparison" must not erase an existing adoption record.
+        if not path.exists():
+            _write(path, plan)
         if not any(item['id']==plan['id'] for item in state['history']):
             state['history'] = [dict(id=plan['id'],time=stamp(),source=plan['source'],scenario=plan['scenario'],reason='候选比较记录，未选用')] + state['history'][:49]
         write_state(config,state)

@@ -16,6 +16,7 @@ from input_errors import error_response
 from production import (read_state, update as production_update, adopt as production_adopt,
                         daily_check, archive as archive_production, read_plan)
 from production_jobs import TrialJobs
+from production_demo import demo_catalog, check_examples
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -58,6 +59,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(read_state(self.server.config_path))
             if path == '/api/production/job':
                 return self._json({'job':self.production_jobs().read()})
+            if path == '/api/production/demo-catalog':
+                return self._json(demo_catalog())
             if path.startswith('/api/production/plans/'):
                 return self._json(read_plan(self.server.config_path,path.rsplit('/',1)[-1]))
             if path == '/api/runs':
@@ -157,6 +160,16 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if not isinstance(body,dict):
                 raise ValueError('请求必须为对象')
+            if action == 'demo-check':
+                return self._json(check_examples())
+            if action == 'demo':
+                jobs=self.production_jobs()
+                with jobs.lock:
+                    if jobs.job and jobs.job['status']=='running':
+                        raise ValueError('请先取消当前试排，再切换演示场景')
+                    result=production_update(self.server.config_path,action,body)
+                    jobs.clear()
+                return self._json(result)
             if action == 'trial':
                 return self._json({'job':self.production_jobs().start(read_state(self.server.config_path),body)})
             if action == 'cancel':

@@ -130,6 +130,28 @@ class BrowserPolicyTests(unittest.TestCase):
 
 
 class WindowsProcessTests(unittest.TestCase):
+    def test_detached_server_stop_rechecks_identity_before_force_termination(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'process.json';path.write_text('{}')
+            record={'pid':1234}
+            with patch.object(manager,'PIDFILE',path),patch.object(manager.platform,'system',return_value='Windows'), \
+                    patch.object(manager,'running',return_value=record) as owned, \
+                    patch.object(manager.subprocess,'run',side_effect=[SimpleNamespace(returncode=1),SimpleNamespace(returncode=0)]) as command, \
+                    patch.object(manager,'windows_process',return_value=None):
+                manager.stop()
+                self.assertEqual(owned.call_count,3)
+                self.assertEqual(command.call_args_list[1].args[0],['taskkill','/PID','1234','/T','/F'])
+                self.assertFalse(path.exists())
+
+    def test_process_identity_change_prevents_force_kill(self):
+        from types import SimpleNamespace
+        with patch.object(manager.platform,'system',return_value='Windows'), \
+                patch.object(manager,'running',side_effect=[{'pid':1234},{'pid':1234},RuntimeError('identity changed')]), \
+                patch.object(manager.subprocess,'run',return_value=SimpleNamespace(returncode=1)) as command:
+            with self.assertRaisesRegex(RuntimeError,'identity changed'):manager.stop()
+            self.assertEqual(command.call_count,1)
+
     def test_owned_process_requires_creation_time_and_paths(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'process.json'

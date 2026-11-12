@@ -106,3 +106,9 @@ class TrialJobs:
         with self.lock:
             if self.job and self.job['status']=='running':
                 self.job['cancel']=True
+
+    def clear(self):
+        with self.lock:
+            if self.job and self.job['status']=='running':
+                raise ValueError('请先取消当前试排，再切换演示场景')
+            self.job=None

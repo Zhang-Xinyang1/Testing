@@ -4,15 +4,18 @@
 
 ## 操作与接口
 
-启动后打开 `/#production`，点击“载入演示数据”，进入“滚动重排 → 开始试排”。完成后查看产品差额、Lot 变化和借机 Recipe，再填写说明选用。刷新页面及定时检查都不会启动排产。
+启动后打开 `/#production`，选择内置场景并点击“载入所选场景”，进入“滚动重排 → 开始试排”。完成后查看产品差额、Lot 变化和借机 Recipe，再确认说明并选用。演示说明已预填，现场说明需人工填写。刷新页面及定时检查都不会启动排产。
 
-实际数据在“滚动重排 → 生产规则与 MES → 粘贴快照进行接收验证”提交。空工作区也可直接接收。演示数据全部合成；实际 MES 工作区不能通过“重置演示数据”被覆盖。切换数据来源或计划月份时清空当前选用状态，保留历史记录。
+实际数据在“滚动重排 → 生产规则与 MES → 粘贴快照进行接收验证”提交。空工作区也可直接接收。演示数据全部合成；实际 MES 工作区不能通过“载入所选场景”被覆盖。切换数据来源或计划月份时清空当前选用状态，保留历史记录。
 
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /api/production` | 已接收快照、规则、已选方案、最近 50 条方案摘要、变化与检查状态 |
 | `POST /api/production/snapshot` | 接收完整快照；不接受零散增量，不自动试排 |
-| `POST /api/production/demo` | 显式载入合成示例，不需要请求字段 |
+| `GET /api/production/demo-catalog` | 10 个场景及 6 种变化的目录，不生成计划 |
+| `POST /api/production/demo` | 如 `{"case":"full"}`，载入综合数据与该场景规则；省略 case 保持兼容载入 basic。清空当前选用、保留历史；计算中拒绝切换 |
+| `POST /api/production/demo-event` | 如 `{"event":"arrival_known"}`，自动生成演示变化；只改演示快照，不自动试排 |
+| `POST /api/production/demo-check` | `{}`，检查 20 个内置输入样例，只读、不排产，返回逐项预期与实际结果 |
 | `POST /api/production/rules` | 保存生产规则；规则对象见下文 |
 | `POST /api/production/trial` | `{"scenario":"actual"}`；扩产为 `{"scenario":"expansion","extraMachines":{"K8000L":2}}` |
 | `GET /api/production/job` | 当前试排状态、已比较候选数、耗时、当前最好方案 |
@@ -173,3 +176,11 @@
 工作区在配置文件同目录的 `production/`，包括 state.json、已选方案及手工保存的比较记录。上传 GitHub 排除此目录；部署迁移时应备份。历史摘要显示最近 50 条，不自动删除旧文件。
 
 当前没有 MES 主动拉取、认证授权或下发执行，没有真实产线性能验收。上游需要确认稳定批次标识、事实快照一致性、在制预计释放、外部最终完工预测、实际状态字典和冻结范围。交付的演示数据用于功能验证，不代表现场供给、产能或承诺交期。
+
+### 内置演示接口值
+
+`case`：`full`、`basic`、`recipe`、`paired_pm`、`month_end`、`capacity`、`freeze`、`identity`、`scale500`、`timeout2000`。载入会重置演示规则；其中 freeze 为 1 小时冻结，scale500 上限 60 秒，timeout2000 上限 2 秒，其余使用确认后的默认规则。
+
+`event`：`arrival_known`（未知来料确认 24 小时后到位）、`arrival_delay`（既有来料延后 48 小时）、`due_urgent`（待排 Lot 交期提前到 2 小时后）、`machine_down`（选择无当前承诺的 CP 停机 12 小时）、`external_forecast`（补充在制外部完工预测）、`release_hold`（放行 HOLD）。时间均相对快照时点自动生成；综合场景覆盖全部六种。每种变化每次载入只能应用一次，不适用的场景明确拒绝。事件保留已选基线、使旧候选失效，并记录生成的具体对象和原因。
+
+输入自检的拒绝样例不会保存到工作区。普通手工来料/交期修改只允许 READY/FUTURE，不得把 DONE/RUNNING/HOLD 改回待排；HOLD 放行用明确放行事件或新 MES 快照。再次保存已选候选为比较记录，不覆盖原选用理由。
