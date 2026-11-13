@@ -43,8 +43,8 @@ def demo_snapshot(now=None):
 SCENARIOS = [
     ('full', '综合生产 · 72 Lot', 72, '六种产品、三类 CP、两台烤箱，覆盖库存、Fab 来料、在制、HOLD、实际完工与重复批次号。',
      ['未知到货与 HOLD 不排产', '在制仅保留当前占用', '25/20/15 片尾批、禁加工与停机均生效', '可一键注入来料/交期/停机变化']),
-    ('basic', '快速入门 · 12 Lot', 12, '小数据快速走完试排、比较、选用与查询流程。',
-     ['首次打开不计算', '三个产品都有缺口', '完成后人工选用，刷新可恢复']),
+    ('basic', '客户主线 · 12 Lot（推荐）', 12, '三个产品，完整演示缺口、来料、跨机台路线、组合维护、借机与人工选用。',
+     ['三种差额、未知来料与 HOLD', '在制外部接续、35 分钟切换与 336 小时静置', '重复 LotID 用 UID 区分，重叠与分时 PM', '应用变化后试排选用，所有结果同步']),
     ('recipe', '借机与 35 分钟切换', 3, '初始 R1，借机前加工切换为 R2；借机要求 R2。',
      ['以借机开始时 R2 校验，而非初始 R1', '同时换 Recipe 和针卡占用 35 分钟', '修改换 Recipe 参数后必须重新试排']),
     ('paired_pm', 'EQP / Prober 组合维护', 12, '同一组合有两条重叠 PM 和两条分时 PM。',
@@ -150,6 +150,11 @@ def scenario_pack(key='full', now=None):
     preset = rules()
     anchor = datetime.fromisoformat(d['asOf'])
     month_end = (anchor.replace(day=28)+timedelta(days=4)).replace(day=1,hour=0,minute=0,second=0,microsecond=0)
+    if key=='basic':
+        d['pm']=paired_pm(d,'CP-B-02')
+        d['lots'][11]['lotId']=d['lots'][5]['lotId']
+        d['lots'][8]['wafer']=20
+        d['constraints']=[dict(eqp='CP-A-02',recipe='R2')]
     if key=='paired_pm':
         d['pm']=paired_pm(d,'CP-B-02')
         d['borrow']=[]

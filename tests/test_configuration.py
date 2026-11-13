@@ -17,6 +17,8 @@ from server_core import (build_payload, load_config, merge_mps,
                          validate_schedule)
 
 
+from legacy_case import build_payload, load_config
+
 class ConfigurationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -133,7 +135,7 @@ class ConfigurationTests(unittest.TestCase):
                 build_payload(config=cfg)
 
     def test_api_preview_save_reload_and_failure_are_atomic(self):
-        workbook = ROOT / 'data/Testing调度算例_新版.xlsx'
+        workbook = Path(load_config()['dataSource']['path'])
         before = hashlib.sha256(workbook.read_bytes()).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / 'config.json'

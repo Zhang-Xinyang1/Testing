@@ -14,6 +14,7 @@ from diagnostics import inspect_run, ms
 from input_rules import flow_product, parse_datetime
 from scheduler import HOUR, MIN, parse_date, run
 from server_core import build_payload, calendar_issues, load_config, resolve_column, validate_schedule
+from legacy_case import build_payload, load_config
 
 
 class HardeningTests(unittest.TestCase):

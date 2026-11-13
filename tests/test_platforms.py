@@ -13,6 +13,7 @@ from platforms import normalize_platforms
 from scheduler import run
 from server import Handler
 from server_core import build_payload, load_config, read_source, validate_schedule
+from legacy_case import build_payload, load_config
 from build_data import read_workbook
 
 

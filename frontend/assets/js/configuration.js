@@ -6,19 +6,19 @@
   var auxiliary = {oracle:false, plan:false};
   function fieldGroup(id) {
     if ((id || '').indexOf('cfg-oracle-') === 0) return 'oracle';
-    return ['cfg-kind','cfg-machine','cfg-target-kind','cfg-time','cfg-hours','cfg-early','cfg-due','cfg-over'].indexOf(id) >= 0 ? 'plan' : 'main';
+    return ['cfg-kind','cfg-machine','cfg-target-kind','cfg-time','cfg-hours','cfg-early','cfg-due','cfg-over','cfg-recipe'].indexOf(id) >= 0 ? 'plan' : 'main';
   }
   var schemas = {
     eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['proberId', 'proberID'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
-    borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number']],
+    borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number'], ['recipe', '借机要求 Recipe'], ['start', '明确开始时间', 'datetime-local']],
     pm: [['eqp', '维护对象（EQPID / proberID）', 'maintenance'], ['targetKind', '对象类型', 'target-kind'], ['early', '最早日期', 'date'], ['due', '期望日期', 'date'], ['over', '最迟完成日期', 'date'], ['hours', '连续小时', 'number'], ['start', '指定开始（可留空）', 'datetime-local']],
-    wip: [['lotId', '在制 LotID'], ['lotKey', '行键（同名 Lot 必填）'], ['eqp', '占用机台（等待可空）', 'resource'], ['chamber', 'BAKE 腔体（CP 留空）'], ['card', '占用针卡（BAKE 留空）'], ['start', '占用开始', 'datetime-local'], ['end', '预计释放', 'datetime-local']]
+    wip: [['lotId', '在制 LotID'], ['lotKey', '行键（同名 Lot 必填）'], ['eqp', '占用机台（等待可空）', 'resource'], ['chamber', 'BAKE 腔体（CP 留空）'], ['card', '占用针卡（BAKE 留空）'], ['step', '当前工序'], ['recipe', '当前 Recipe'], ['start', '占用开始', 'datetime-local'], ['end', '预计释放', 'datetime-local']]
   };
   A.configurationBusy = function () { return busy; };
   A.hasConfigurationChanges = function () { return dirty || auxiliary.oracle || auxiliary.plan || !!pendingUpload; };
   function updateDraftStatus() {
     var el = A.$('#cfg-draft-status');
-    if (el) el.textContent = A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿。' + (dirty || pendingUpload ? '生产配置可“仅保存”或“保存并排产”。' : '') + (auxiliary.oracle ? 'Oracle 项请单独保存。' : '') + (auxiliary.plan ? '新增计划请点击“添加计划并保存”。' : '') : '配置已保存。';
+    if (el) el.textContent = A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿。' + (dirty || pendingUpload ? '生产配置可“仅保存”或“保存并前往试排”。' : '') + (auxiliary.oracle ? 'Oracle 项请单独保存。' : '') + (auxiliary.plan ? '新增计划请点击“添加计划并保存”。' : '') : '配置已保存。';
   }
   function markDirty(event) {
     if (busy) return;
@@ -126,31 +126,31 @@
       '<div class="table-scroll config-editor"><table class="data-table" id="cfg-table-' + key + '"><thead><tr>' + schemas[key].map(function (col) { return '<th>' + col[1] + '</th>'; }).join('') + '<th>操作</th></tr></thead><tbody>' + rows.map(function (row) { return rowHTML(key, row); }).join('') + '</tbody></table></div><button class="btn ghost small" data-cfg-new="' + key + '">增加一行</button></details>';
   }
   A.configurationHTML = function () {
-    if (A.state.mode !== 'server') return '<div class="card production-config"><div class="card-head"><div><h3>Excel 导入</h3><p>上传只读副本后保存并自动重排，不修改原文件。</p></div></div><div class="card-body">' +
+    if (A.state.mode !== 'server') return '<div class="card production-config"><div class="card-head"><div><h3>Excel 导入</h3><p>上传只读副本后保存，进入试排与人工选用，不修改原文件。</p></div></div><div class="card-body">' +
       '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx" disabled><span class="config-hint">当前为内置算例静态模式，无法上传。请启动后端服务（<code>python3 run.py</code>）后访问 <code>http://127.0.0.1:8080</code>。</span></label>' +
       '<div class="note-card">当前页面未连接后端，仅展示内置算例；导入、保存和重新排产不可用。</div></div></div>';
     var c = A.state.config, d = configuredData(), bake = d.bakeResources || {machines:'', chambers:''};
     var selectedPath = pendingUpload ? pendingUpload.path : c.dataSource.path;
     var selectedName = pendingUpload ? pendingUpload.name : c.dataSource.displayName || selectedPath.split(/[\\/]/).pop();
     var borrow = d.borrow;
-    return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>先核对数据，可仅保存，也可保存并排产；原 Excel 保持只读。</p></div></div><div class="card-body">' +
-      '<div class="config-grid" data-config-part="source">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“仅保存”或“保存并排产”；如需沿用新文件内的机台与计划，再点击“恢复 Excel 设备与计划”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
+    return '<div class="card production-config"><div class="card-head"><div><h3>生产配置</h3><p>先核对数据，可仅保存，也可保存并前往试排；原 Excel 保持只读。</p></div></div><div class="card-body">' +
+      '<div class="config-grid" data-config-part="source">' + '<label class="config-field">Excel 导入（.xlsx）<input class="input" id="cfg-file" type="file" accept=".xlsx"><span id="cfg-file-status">' + esc(selectedName) + '</span><span class="config-hint">' + (pendingUpload ? '新文件已上传，等待保存。' : '') + '选择新文件后点击下方“仅保存”或“保存并前往试排”；如需沿用新文件内的机台与计划，再点击“恢复 Excel 设备与计划”。</span><input id="cfg-path" type="hidden" value="' + esc(selectedPath) + '"></label>' + input('month', '计划月份', c.dataSource.month, 'month') + input('bake-machines', 'BAKE 台数', bake.machines, 'number') + input('bake-chambers', '每台 BAKE 腔体数', bake.chambers, 'number') + '</div>' +
       '<details class="config-details" data-config-part="advanced"><summary>Oracle 数据源 · 预留</summary><p>仅保存连接配置，当前不连接数据库。</p><div class="config-grid">' + input('oracle-host', '主机', (c.oracle || {}).host) + input('oracle-port', '端口', (c.oracle || {}).port || 1521, 'number') + input('oracle-service', 'Service Name', (c.oracle || {}).service) + input('oracle-user', '只读用户名', (c.oracle || {}).user) + input('oracle-env', '密码环境变量名', (c.oracle || {}).passwordEnv || 'ORACLE_PASSWORD') + '</div>' + jsonBox('oracle-views', '业务视图映射', (c.oracle || {}).views || {}) + '<button class="btn ghost" id="cfg-oracle-save">保存 Oracle 配置</button><div id="cfg-oracle-status" role="status"></div></details>' +
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
       '<p class="config-hint" data-config-part="resources">BAKE 台数：EQP 中有 OVEN 时以设备行数为准；没有 OVEN 时使用上方配置台数。每台腔体数使用上方配置，请核对实际容量。</p>' +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
       (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复 Excel 设备与计划”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
       table('eqp', '设备与 prober 对应关系', d.eqp) + '<p class="config-hint">PM 可填写 EQPID 或 proberID；两者组装为同一设备，任一部件维护都会整组停机。配对部件的指定时间重叠时，仅合并停机区间，两项维护任务均保留；不同时间分别停机。未指定时间仍按两项任务分别安排。编号同时匹配两类对象时请选择对象类型。</p>' + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
-      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中 LotID 唯一时可只填 LotID，同名时还须填写行键（Lot 详情可查看）；重新导入后请核对行键；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) + (A.taskOverridesHTML ? A.taskOverridesHTML() : '') +
-      '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-validate">检查输入</button><button class="btn ghost" id="cfg-save-only">仅保存</button><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复 Excel 设备与计划</button><button class="btn ghost" id="cfg-discard">放弃未保存修改</button></div><p id="cfg-draft-status" class="config-hint" role="status">' + (A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿，保存后才生效。' : '配置已保存。') + '</p>' +
+      '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。当前占用需填设备、工序、Recipe 和起止时间；CP 还需针卡，BAKE 需腔体。同名 Lot 须填写 Excel 行键（LOT-000001 起）；重新导入后请核对行键。等待来料请在 Lot 明细中标记 FUTURE，不要填写为在制。RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) + (A.taskOverridesHTML ? A.taskOverridesHTML() : '') +
+      '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-validate">检查输入</button><button class="btn ghost" id="cfg-save-only">仅保存</button><button class="btn primary" id="cfg-save">保存并前往试排</button><button class="btn ghost" id="cfg-excel">恢复 Excel 设备与计划</button><button class="btn ghost" id="cfg-discard">放弃未保存修改</button></div><p id="cfg-draft-status" class="config-hint" role="status">' + (A.hasConfigurationChanges() ? '有未保存修改：切换页面会保留草稿，保存后才生效。' : '配置已保存。') + '</p>' +
       ((d.planIssues || []).length ? '<div class="note-card">当前计划冲突：' + d.planIssues.map(esc).join('<br>') + '</div>' : '') +
-      '<div class="section-title" data-config-part="plans"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
+      '<div class="section-title" data-config-part="plans"><h2>新增借机或维护</h2><p>借机需明确开始时间和 Recipe；PM 在维护窗口内安排。与其他任务一起试排并选用。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
       '<label class="config-field">设备／维护对象<select class="select" id="cfg-machine">' + resources(true, true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
       '<label class="config-field">PM 对象类型<select class="select" id="cfg-target-kind"><option value="">自动识别</option><option value="EQP">EQP</option><option value="PROBER">PROBER</option></select></label>' +
-      input('time', '借机日期', d.meta.month + '-01', 'date') + input('hours', '时长（小时）', 8, 'number') +
+      input('time', '借机开始', A.unifiedEnabled?'':d.meta.month + '-01', A.unifiedEnabled?'datetime-local':'date') + input('recipe','借机要求 Recipe','') + input('hours', '时长（小时）', 8, 'number') +
       input('early', 'PM 最早日期', d.meta.month + '-01', 'date') + input('due', 'PM 期望日期', d.meta.month + '-03', 'date') + input('over', 'PM 最迟完成日期', d.meta.month + '-05', 'date') + '</div>' +
-      '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-recommend">试排并推荐</button><button class="btn primary" id="cfg-add">添加计划并保存</button></div><div id="cfg-result" class="note-card" role="status">推荐后点击添加保存。</div></div></div>';
+      '<div class="source-actions config-actions">'+(A.unifiedEnabled?'':'<button class="btn ghost" id="cfg-recommend">试排并推荐</button>')+'<button class="btn primary" id="cfg-add">添加计划并保存</button></div><div id="cfg-result" class="note-card" role="status">保存后进入统一试排，检查维护时间和借机 Recipe，再人工选用。</div></div></div>';
   };
   function draft() {
     var src = Object.assign({}, A.state.config.dataSource, JSON.parse(A.$('#cfg-source').value));
@@ -193,10 +193,11 @@
     var preview = await request('api/preview', update);
     if (preview.data.planIssues && preview.data.planIssues.length) throw new Error(preview.data.planIssues.slice(0,5).join('；'));
     var options = JSON.parse(JSON.stringify(A.state.options));
-    var result = runAfterSave ? await A.SCHED.run(preview.data, options) : null;
+    var result = runAfterSave && !A.unifiedEnabled ? await A.SCHED.run(preview.data, options) : null;
     var body = await request('api/config', update);
     A.state.data = body.data; A.state.config = body.config;
     A.state.loadError = null;
+    if(A.acceptProductionState&&body.production)A.acceptProductionState(body.production);
     A.captureConfigurationDraft();
     if (pendingUpload && body.config.dataSource.path === pendingUpload.path) pendingUpload = null;
     dirty = false;
@@ -212,7 +213,7 @@
     else {
       A.state.result = null;
       A.updateRunChip(); A.renderInputs();
-      A.toast('配置已保存，尚未排产。需要结果时点击“重新排产”。');
+      A.toast(A.unifiedEnabled?'Excel 已接入统一生产数据，请进入滚动重排检查并试排。':'配置已保存，尚未排产。需要结果时点击“重新排产”。');
     }
   }
   function plan(eqp) {
@@ -221,6 +222,11 @@
     if (kind === 'borrow') {
       if (!time || !configuredData().eqp.some(function(m){return m.id===eqp && !/OVEN/i.test(m.type);})) throw new Error('借机请选择 CP 机台并填写开始时间');
       if (hours<0.6 || hours>24) throw new Error('借机时数需为 0.6–24 小时');
+      if(A.unifiedEnabled){
+        var recipe=A.$('#cfg-recipe').value.trim();
+        if(!recipe)throw new Error('请填写借机要求 Recipe');
+        return {eqp:eqp,date:time.slice(0,10),hours:hours,start:A.SCHED.isoDate(A.SCHED.parseDate(time)),recipe:recipe};
+      }
       return {eqp:eqp, date:time.slice(0,10), hours:hours};
     }
     return {eqp:eqp, targetKind:A.$('#cfg-target-kind').value, early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};

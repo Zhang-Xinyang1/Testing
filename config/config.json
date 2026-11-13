@@ -2,7 +2,7 @@
   "dataSource": {
     "type": "excel",
     "path": "data/Testing调度算例_新版.xlsx",
-    "month": "2026-09",
+    "month": "2026-11",
     "sheetMap": {
       "mps": "MPS",
       "eqp": "EQP",
@@ -10,7 +10,9 @@
       "flow": "测试flow&工时",
       "borrow": "借机计划",
       "pm": "PM计划",
-      "constraints": "约束条件"
+      "constraints": "约束条件",
+      "lots": "Lot明细",
+      "production": "生产信息"
     },
     "headerRow": 1
   },
@@ -42,7 +44,9 @@
     "借机计划": {
       "date": "DATE",
       "eqp": "EQPID",
-      "hours": "借机时数"
+      "hours": "借机时数",
+      "recipe": "Recipe",
+      "start": "Start"
     },
     "PM计划": {
       "eqp": "EQP ID",
@@ -57,6 +61,32 @@
       "type": "TYPE",
       "eqp": "EQPID",
       "recipe": "Constraint Recipe"
+    },
+    "Lot明细": {
+      "lotId": "LotID",
+      "uid": "UID",
+      "ppn": "PROD",
+      "platform": "Platform",
+      "wafer": "Wafer Qty",
+      "state": "State",
+      "release": "Release Time",
+      "shipDue": "Ship Due",
+      "monthlyDue": "Ship Due",
+      "location": "Location",
+      "holdReason": "Hold Reason",
+      "actualComplete": "Actual Complete",
+      "externalComplete": "External Complete",
+      "currentEqp": "Current EQP",
+      "currentChamber": "Current Chamber",
+      "currentStep": "Current Step",
+      "currentRecipe": "Current Recipe",
+      "currentCard": "Current Card",
+      "currentStart": "Current Start",
+      "currentEnd": "Current End"
+    },
+    "生产信息": {
+      "asOf": "AsOf",
+      "identityStable": "Identity Stable"
     }
   },
   "server": {
@@ -65,13 +95,12 @@
   },
   "scheduling": {
     "bakeResources": {
-      "machines": 7,
-      "chambers": 4
+      "machines": 1,
+      "chambers": 2
     },
     "platformType": {
       "CP-A": "CP-A",
-      "CP-B": "CP-B",
-      "CP-C": "CP-C"
+      "CP-B": "CP-B"
     },
     "rulesVersion": "confirmed-2026-11-06"
   }

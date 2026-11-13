@@ -45,6 +45,23 @@ def read_state(config):
 def write_state(config, state):
     folder(config).mkdir(parents=True, exist_ok=True)
     _write(folder(config) / 'state.json', state)
+    source=(state.get('snapshot') or {}).get('source') or state.get('selectedSource')
+    if source in ('excel','mes','demo'):
+        directory=folder(config)/'sources';directory.mkdir(exist_ok=True)
+        _write(directory/(source+'.json'),state)
+
+
+def source_state(config, state, source):
+    """Switch an explicit source without erasing another source's selected plan."""
+    if source not in ('excel','mes','demo'):
+        raise ValueError('数据来源须为 Excel、MES 或演示')
+    current=(state.get('snapshot') or {}).get('source') or state.get('selectedSource')
+    if current==source:return state
+    write_state(config,state)
+    path=folder(config)/'sources'/(source+'.json')
+    if path.exists():return json.loads(path.read_text(encoding='utf-8'))
+    return dict(revision=0,snapshot=None,rules=rules(),active=None,history=[],events=[],
+                lastCheck=None,changePending=False,selectedSource=source)
 
 
 def month_bounds(month):
@@ -60,8 +77,8 @@ def validate_snapshot(raw):
     for key in ('snapshotId','asOf','month','demands','lots','equipment','flows','recipes'):
         if key not in d:
             raise ValueError('MES 快照缺少字段：' + key)
-    if d.get('schemaVersion') != 1 or d.get('source') not in ('mes','demo'):
-        raise ValueError('schemaVersion 必须为 1，source 必须为 mes 或 demo')
+    if d.get('schemaVersion') != 1 or d.get('source') not in ('mes','demo','excel'):
+        raise ValueError('schemaVersion 必须为 1，source 必须为 mes、demo 或 excel')
     if type(d.get('identityStable', False)) is not bool:
         raise ValueError('identityStable 必须为布尔值')
     if not isinstance(d['snapshotId'],str) or not d['snapshotId'].strip():
@@ -157,7 +174,8 @@ def validate_snapshot(raw):
         quantity(row.get('wafer'), 'Lot wafer', 1, 25)
         if not row['platform'] or set(row['platform'].split(';')) - types:
             raise ValueError('Lot Platform 未匹配设备 TYPE：' + row['lotId'])
-        date(row.get('shipDue'), '内部计划出货日')
+        if row.get('shipDue') or d['source']!='excel':
+            date(row.get('shipDue'), '内部计划出货日')
         if row.get('availableAt'):
             date(row['availableAt'], '预计可用时间')
         if row['state'] == 'READY' and (not row.get('availableAt') or date(row['availableAt'], '可用时间') > asof):
@@ -243,7 +261,18 @@ def record_change(state, kind, reason):
 def update(config, action, body):
     with LOCK:
         state = read_state(config)
-        if action == 'demo':
+        if action == 'source':
+            state=source_state(config,state,body.get('source'))
+        elif action == 'excel':
+            state=source_state(config,state,'excel')
+            if state.get('snapshot')==body:
+                write_state(config,state)
+                return state
+            old=state.get('snapshot')
+            state['snapshot']=copy.deepcopy(body)
+            if old and old['month']!=body['month']:state['active']=None
+            record_change(state,'Excel 接收','已保存的 Excel 数据已接入统一排产；请检查待补充项后试排')
+        elif action == 'demo':
             from production_demo import scenario_pack
             if state['snapshot'] and state['snapshot']['source'] != 'demo':
                 raise ValueError('当前已接入 MES 快照，演示入口不会覆盖现场数据')
@@ -262,8 +291,10 @@ def update(config, action, body):
             record_change(state,'一键模拟变化',reason)
         elif action == 'snapshot':
             snapshot = validate_snapshot(body)
+            state=source_state(config,state,snapshot['source'])
             old = state.get('snapshot')
             if old == snapshot:
+                write_state(config,state)
                 return state
             if old and snapshot['source'] == old['source'] and parse_date(snapshot['asOf']) < parse_date(old['asOf']):
                 raise ValueError('拒绝早于当前时点的过期快照')
@@ -320,6 +351,10 @@ def daily_check(config):
 
 
 def prepare(state, request):
+    if not state.get('snapshot'):
+        raise ValueError('请先接收 Excel、MES 或演示数据')
+    if state['snapshot'].get('inputIssues'):
+        raise ValueError('Excel 待补充：'+'；'.join(state['snapshot']['inputIssues'][:8]))
     d = validate_snapshot(state['snapshot'])
     r = rules(state['rules'])
     asof = parse_date(d['asOf'])
@@ -386,11 +421,11 @@ def prepare(state, request):
     for lot in d['lots']:
         if lot['state'] == 'DONE' or lot['uid'] in frozen_ids:
             continue
-        if lot['state'] == 'HOLD' or (lot['state'] != 'RUNNING' and not lot.get('availableAt')):
-            held.append(dict(lot, reason=lot.get('holdReason') or '缺少明确可用时间'))
+        if lot['state'] == 'HOLD' or (lot['state'] != 'RUNNING' and (not lot.get('availableAt') or not lot.get('shipDue'))):
+            held.append(dict(lot, reason=lot.get('holdReason') or ('缺少内部出货日' if not lot.get('shipDue') else '缺少明确可用时间')))
             continue
         rows.append([lot['lotId'],lot['ppn'],lot['platform'],lot['wafer'],
-                     iso_date(max(asof,parse_date(lot.get('availableAt')) or asof)),'W1',last.date().isoformat(),lot['shipDue'],1])
+                     iso_date(max(asof,parse_date(lot.get('availableAt')) or asof)),'W1',last.date().isoformat(),lot.get('shipDue') or last.isoformat(),1])
         source.append(lot)
         if lot['state'] == 'RUNNING':
             wip.append(dict(lot['current'],lotId=lot['lotId'],lotKey='LOT-%06d' % len(rows)))
@@ -472,7 +507,7 @@ def project(state, request, prepared, result):
     for lot in lots:
         if lot.get('reason'):
             alerts.append({'kind':'待排条件不足','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：'+lot['reason']})
-        if lot.get('complete') and lot['complete'] - parse_date(lot['shipDue']) > r['delayAlertHours']*HOUR:
+        if lot.get('complete') and lot.get('shipDue') and lot['complete'] - parse_date(lot['shipDue']) > r['delayAlertHours']*HOUR:
             alerts.append({'kind':'交期风险','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：预计/实际完工晚于内部出货日'})
         if lot['state']=='RUNNING' and not lot.get('externalComplete'):
             alerts.append({'kind':'外部预测待补','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：仅保留当前占用，最终完工待外部提供'})

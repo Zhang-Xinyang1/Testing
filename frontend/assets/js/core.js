@@ -28,7 +28,7 @@
   A.state = {
     data: null, config: null, mode: 'embedded', loadError: null, result: null,
     options: { strategy: 'attainment', borrowMode: 'reserve', bakeWindowHours: null, setupMinutes: 5, maxDelayHours: 0 },
-    view: 'mps',
+    view: 'production',
     mps: { q: '', platform: 'all' },
     gantt: { mode: 'all', range: '1d', anchor: 0, platform: 'all', q: '' },
     inputs: { sheet: 'MPS', q: '', page: 1 },
@@ -126,13 +126,14 @@
   };
 
   A.syncNav = function () {
-    A.$$('.nav-item').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === A.state.view); });
+    A.$$('.nav-item').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-view') === ({mps:'production',history:'replanning'}[A.state.view]||A.state.view)); });
     A.$$('.view').forEach(function (v) { v.classList.toggle('active', v.id === 'view-' + A.state.view); });
     A.$('#page-title').textContent = A.TITLES[A.state.view][0];
     A.$('#page-sub').textContent = A.TITLES[A.state.view][1];
   };
 
   A.navigate = function (view) {
+    if(view!=='history')A.state.legacyHistory=false;
     if (['inputs','production','tracking','replanning'].indexOf(view) >= 0 && A.leaveHistoricalView) A.leaveHistoricalView();
     if (!A.TITLES[view]) return;
     A.state.view = view;
@@ -199,6 +200,7 @@
     }
   };
   A.runSchedule = async function (cached) {
+    if(A.unifiedEnabled){await A.refreshProduction();A.startProductionTrial();return;}
     if (!A.state.data) return;
     if (A.state.mode !== 'server') {
       A.toast('静态模式不执行排产，请启动 Python 服务');
@@ -265,7 +267,7 @@
           '\n排产由 Python 后端执行。请运行 <code>python3 run.py</code>，' +
           '然后访问 <code>http://127.0.0.1:8080</code>。</div>';
       }
-      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“数据配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并排产”。</p><div class="source-actions"><button class="btn ghost" data-open-view="inputs">检查数据配置</button><button class="btn ghost" data-open-view="history">打开历史方案</button></div></div>';
+      if (el && A.state.mode === 'server') el.innerHTML = '<div class="empty-state"><b>尚未排产</b><p>打开或刷新页面只读取数据。请先检查“数据配置”，再点击“重新排产”。该按钮读取已保存的数据；未保存的编辑请使用“保存并前往试排”。</p><div class="source-actions"><button class="btn ghost" data-open-view="inputs">检查数据配置</button><button class="btn ghost" data-open-view="history">打开历史方案</button></div></div>';
       return;
     }
     if (A.state.view === 'mps') A.renderMps();

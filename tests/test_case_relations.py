@@ -10,6 +10,8 @@ from server_core import (build_payload, load_config, parse_datetime,
 import copy
 from build_data import read_workbook, clean_rows
 
+from legacy_case import build_payload, load_config
+
 class CaseRelationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

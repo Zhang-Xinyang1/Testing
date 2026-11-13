@@ -4,13 +4,15 @@
   var A = window.TSApp;
   var $ = A.$, num = A.num, esc = A.esc, fmtDate = A.fmtDate, fmtDateTime = A.fmtDateTime, pad2 = A.pad2;
   var DAY = A.DAY, HOUR = A.HOUR;
+  A.ganttResult=function(){return A.state.result;};
+  A.ganttData=function(){return A.state.data;};
 
   function renderGantt() {
-    var r = A.state.result, g = A.state.gantt;
+    var r = A.ganttResult(), g = A.state.gantt;
     var span = ganttWindow(r, g), rangeDays = span.days, start = span.start;
     var platformOpts = '<option value="all">全部 Platform</option>' +
-      Object.keys(A.state.data.platformType).sort().map(function (p) {
-        return '<option value="' + p + '"' + (g.platform === p ? ' selected' : '') + '>' + p + ' · ' + A.state.data.platformType[p] + '</option>';
+      Object.keys(A.ganttData().platformType).sort().map(function (p) {
+        return '<option value="' + p + '"' + (g.platform === p ? ' selected' : '') + '>' + p + ' · ' + A.ganttData().platformType[p] + '</option>';
       }).join('');
     var html = '<div class="toolbar">' +
       '<span class="label">资源</span><div class="seg" data-gantt-mode>' +
@@ -37,7 +39,7 @@
       '<div class="gantt-footer"><span>北京时间 · ' + ganttRangeLabel(start, rangeDays, span.fullMonth) + '</span><span id="gantt-footer-stat">—</span></div>' +
     '</div>' +
     '<div class="gantt-tip" id="gantt-tip"></div>';
-    $('#view-gantt').innerHTML = html;
+    $('#view-gantt').innerHTML = (A.productionGanttHeader?A.productionGanttHeader():'') + html;
     drawGantt();
   }
 
@@ -54,14 +56,14 @@
     var wd = ['日', '一', '二', '三', '四', '五', '六'][new Date(start + 8 * HOUR).getUTCDay()];
     if (rangeDays === 1) return (new Date(start + 8 * HOUR).getUTCMonth() + 1) + '月' + new Date(start + 8 * HOUR).getUTCDate() + '日 周' + wd;
     if (fullMonth) {
-      var mm = (A.state.data.meta && A.state.data.meta.month) || '';
+      var mm = (A.ganttData().meta && A.ganttData().meta.month) || '';
       return mm ? mm.split('-')[0] + ' 年 ' + Number(mm.split('-')[1]) + ' 月' : '全月';
     }
     return fmtDate(start) + ' - ' + fmtDate(start + rangeDays * DAY - 1);
   }
 
   function buildGanttRows() {
-    var r = A.state.result, g = A.state.gantt;
+    var r = A.ganttResult(), g = A.state.gantt;
     var rows = [];
     if (g.mode !== 'bake') {
       var types = g.platform === 'all' ? Array.from(new Set(r.machines.map(function(m){return m.type;}))).sort() : [g.platform];
@@ -89,14 +91,14 @@
 
   function platformOfType(type) {
     var found = type;
-    Object.keys(A.state.data.platformType).forEach(function (k) { if (A.state.data.platformType[k] === type) found = k; });
+    Object.keys(A.ganttData().platformType).forEach(function (k) { if (A.ganttData().platformType[k] === type) found = k; });
     return found;
   }
 
   function drawGantt() {
     var canvas = $('#gantt-canvas'), scroll = $('#gantt-scroll');
-    if (!canvas || !scroll || !A.state.result) return;
-    var r = A.state.result, g = A.state.gantt;
+    if (!canvas || !scroll || !A.ganttResult()) return;
+    var r = A.ganttResult(), g = A.state.gantt;
     var rows = buildGanttRows();
     var span = ganttWindow(r, g), rangeDays = span.days, start = span.start, end = span.end;
     var width = Math.max(scroll.clientWidth || 1000, 920);
@@ -306,7 +308,7 @@ function ganttHit(e) {
         '<div class="tip-row"><span class="tip-muted">Recipe</span><span>' + esc(t.recipe) + '</span></div>' +
         '<div class="tip-row"><span class="tip-muted">针卡</span><span class="mono">' + esc(t.card) + '</span></div>' +
         '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(t.start) + ' → ' + A.SCHED.fmt(t.end, false) + '</span></div>' +
-        '<div class="tip-row"><span class="tip-muted">加工 / 换卡</span><span>' + (t.duration / 60000).toFixed(0) + ' min + ' + (t.setup / 60000).toFixed(0) + ' min</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">加工 / 切换</span><span>' + (t.duration / 60000).toFixed(0) + ' min + ' + (t.setup / 60000).toFixed(0) + ' min</span></div>' +
         '<div class="tip-row"><span class="tip-muted">晶圆</span><span>' + t.wafer + ' pcs</span></div>';
     } else if (hit.type === 'bake') {
       var b = hit.data;
@@ -352,10 +354,10 @@ function ganttHit(e) {
 
   function locateLot(q) {
     q = (q || '').trim().toUpperCase();
-    if (!q || !A.state.result) return;
-    var task = A.state.result.cpTasks.filter(function (t) { return t.lotKey === q || t.lotId.toUpperCase() === q; })[0];
+    if (!q || !A.ganttResult()) return;
+    var task = A.ganttResult().cpTasks.filter(function (t) { return t.lotKey === q || t.lotId.toUpperCase() === q; })[0];
     if (!task) {
-      var lot = A.state.result.lots.filter(function (l) { return l.key === q || l.id.toUpperCase() === q; })[0];
+      var lot = A.ganttResult().lots.filter(function (l) { return l.key === q || l.id.toUpperCase() === q; })[0];
       if (lot && lot.cpTasks.length) task = lot.cpTasks[0];
     }
     if (!task) { A.toast('未找到 Lot：' + q); return; }

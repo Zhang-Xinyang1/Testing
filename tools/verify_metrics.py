@@ -187,8 +187,8 @@ def main():
             data = json.load(handle)
     else:
         sys.path.insert(0, str(ROOT / 'backend'))
-        from server_core import build_payload
-        print('未找到 %s，改用当前配置和 Excel 数据。' % input_path)
+        from legacy_case import build_payload
+        print('未找到 %s，生成独立旧版规模回归数据，不改写客户演示 Excel。' % input_path)
         data = build_payload()
     verify(data, args.output_dir)
 

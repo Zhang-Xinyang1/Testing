@@ -555,7 +555,7 @@ test('export buttons before the first schedule explain the required action inste
   for (const kind of ['mps', 'lots']) {
     listeners.click({target:{closest:selector => selector === '[data-export]' ? {getAttribute:()=>kind} : null}});
   }
-  assert.equal(env.messages.filter(message => message.includes('请先排产再导出')).length, 2);
+  assert.equal(env.messages.filter(message => message.includes('请先试排并选用再导出')).length, 2);
 });
 
 test('raw configuration drafts survive view rebuilds, failed saves and row edits until explicitly discarded', async () => {
@@ -746,6 +746,7 @@ function productionEnvironment(snapshot) {
   const env=environment(), nodes={}, listeners={}, requests=[];
   env.app.$=id=>nodes[id]||(nodes[id]={});
   env.app.state.view='production';
+  env.app.closeDrawer=()=>{};
   env.context.document={addEventListener(type,fn){listeners[type]=fn;}};
   env.context.setTimeout=()=>1; env.context.clearTimeout=()=>{};
   const state={snapshot,active:null,history:[],events:[],rules:{recipeChangeMinutes:30,freezeHours:0},changePending:false};
@@ -784,7 +785,7 @@ test('production rule draft survives navigation and prevents scheduling with uns
 
 test('new facts update actual KPI while the selected forecast remains clearly marked as stale', async()=>{
   const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',demands:[{ppn:'P',wafer:100}],lots:[{ppn:'P',state:'DONE',wafer:25,actualComplete:'2026-11-11'}]});
-  env.workspace.active={products:[{ppn:'P',target:100,actual:0,forecast:50}],alerts:[]};
+  env.workspace.active={id:'TEST-ACTIVE',input:env.workspace.snapshot,products:[{ppn:'P',target:100,actual:0,forecast:50}],alerts:[]};
   env.workspace.changePending=true;
   await env.action('refresh');
   assert.match(env.nodes['#view-production'].innerHTML,/实际完成<\/span><strong>25<\/strong>/);
@@ -794,7 +795,7 @@ test('new facts update actual KPI while the selected forecast remains clearly ma
 
 test('future completion does not masquerade as an active rest countdown', async()=>{
   const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',demands:[{ppn:'P',wafer:25}],lots:[{uid:'L1',lotId:'L1',ppn:'P',wafer:25,state:'READY'}]});
-  env.workspace.active={products:[],alerts:[],lots:[{uid:'L1',complete:env.app.SCHED.parseDate('2026-11-13'),tasks:[]}]};
+  env.workspace.active={id:'TEST-ACTIVE',input:env.workspace.snapshot,products:[],alerts:[],lots:[{uid:'L1',complete:env.app.SCHED.parseDate('2026-11-13'),tasks:[]}]};
   let drawer='';env.app.openDrawer=(k,t,html)=>{drawer=html;};
   await env.action('refresh');
   await env.listeners.click({target:{closest:s=>s==='[data-prod-lot]'?{dataset:{prodLot:'L1'}}:null}});
@@ -839,4 +840,52 @@ test('input self-check distinguishes expected rejection from a test failure',asy
   assert.match(html,/1 \/ 1 符合预期/);
   assert.match(html,/错误日期/);
   assert.match(html,/不保存样例，不启动排产/);
+});
+
+test('unified MPS, Gantt and Lot results use the selected plan through pending input changes', async()=>{
+  const snapshot={source:'excel',month:'2026-11',asOf:'2026-11-13T08:00:00+08:00',identityStable:true,demands:[{ppn:'P',wafer:100}],equipment:[{id:'M1',type:'CP-A'}],lots:[{uid:'U1',lotId:'SAME',ppn:'P',wafer:25,state:'READY',location:'原位置'}]};
+  const env=productionEnvironment(snapshot),S=env.app.SCHED;
+  const selected={id:'SELECTED-ONE',input:JSON.parse(JSON.stringify(snapshot)),asOf:snapshot.asOf,products:[{ppn:'P',target:100,actual:0,forecast:25,targetDelta:-75}],alerts:[],pm:[],lots:[{...snapshot.lots[0],tasks:[{step:'CP1',machine:'M1',start:S.parseDate(snapshot.asOf),end:S.parseDate('2026-11-13T09:00:00+08:00')}],complete:S.parseDate('2026-11-13T09:00:00+08:00')}]};
+  env.workspace.active=selected;env.workspace.chart={planId:selected.id};env.workspace.changePending=true;
+  snapshot.lots=[];snapshot.demands[0].wafer=200;
+  env.app.state.result={oldLegacy:true};
+  env.app.renderGantt=()=>{env.nodes['#view-gantt'].innerHTML=env.app.productionGanttHeader();};
+  await env.action('refresh');
+  for(const view of ['production','mps','tracking','gantt']){
+    env.app.navigate(view);
+    assert.match(env.nodes['#view-'+view].innerHTML,/data-current-plan="SELECTED-ONE"/);
+  }
+  assert.equal(env.app.ganttResult().planId,selected.id);
+  env.app.navigate('tracking');assert.match(env.nodes['#view-tracking'].innerHTML,/SAME/);assert.match(env.nodes['#view-tracking'].innerHTML,/原位置/);
+  const mps=env.app.buildProductionCsv('mps');assert.match(mps.text,/"SELECTED-ONE","P","100","0","25"/);
+  assert.match(env.app.buildProductionCsv('lots').text,/"U1","SAME"/);
+  assert.equal(env.requests.filter(r=>r.url.endsWith('/trial')).length,0);
+  env.app.state.historyId='legacy';env.app.state.view='gantt';assert.equal(env.app.ganttResult().oldLegacy,true);
+});
+
+test('the MES empty state asks for a snapshot without showing the demo loader', async()=>{
+  const env=productionEnvironment(null);env.workspace.selectedSource='mes';
+  await env.action('refresh');
+  const html=env.nodes['#view-production'].innerHTML;
+  assert.match(html,/请在下方接收 MES 完整快照/);
+  assert.doesNotMatch(html,/data-prod-action="demo"/);
+  assert.match(html,/data-prod-action="source-excel"/);
+});
+
+test('Excel supplemental confirmations reflect workbook metadata and retain deliberate false values', async()=>{
+  const env=productionEnvironment({source:'excel',month:'2026-11',asOf:'2026-11-13T08:00:00+08:00',identityStable:true,lots:[],demands:[],equipment:[],excelOptions:{}});
+  await env.action('refresh');
+  assert.match(env.nodes['#view-production'].innerHTML,/id="prod-excel-identityStable" type="checkbox" checked/);
+  assert.match(env.nodes['#view-production'].innerHTML,/2026-11-13T08:00/);
+  env.listeners.input({target:{id:'prod-excel-identityStable',type:'checkbox',checked:false,dataset:{}}});
+  env.app.navigate('replanning');
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/id="prod-excel-identityStable" type="checkbox" checked/);
+});
+
+test('Excel preview displays explicit production facts rather than generated legacy dates',()=>{
+  const env=environment(),preview={};env.app.$=()=>preview;env.app.$$=()=>[];
+  env.app.state.data={...inputData(),sheetMap:{lots:'Lot明细',production:'生产信息'},lots:[['L','P','A',25,'2026-11-01']],productionFacts:[{uid:'U1',state:'FUTURE',availableAt:'',shipDue:'2026-11-20',currentStep:'CP1'}],productionMeta:{asOf:'2026-11-13T08:00:00+08:00',identityStable:true}};
+  vm.runInContext(env.read('inputs.js'),env.context);
+  env.app.selectInputSheet('Lot明细');assert.match(preview.innerHTML,/<td>U1<\/td>/);assert.match(preview.innerHTML,/<td>FUTURE<\/td>/);assert.doesNotMatch(preview.innerHTML,/<td>2026-11-01<\/td>/);
+  env.app.selectInputSheet('生产信息');assert.match(preview.innerHTML,/<td>true<\/td>/);assert.doesNotMatch(preview.innerHTML,/未映射，不参与排产/);
 });

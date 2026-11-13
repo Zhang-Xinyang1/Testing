@@ -1,5 +1,5 @@
 {
-  "time": "2026-11-12T13:34:00.160928+08:00",
+  "time": "2026-11-13T15:52:40.174666+08:00",
   "synthetic": true,
   "scenarios": [
     {
@@ -9,7 +9,7 @@
       "wafers": 1440,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.5,
+      "elapsed": 0.4,
       "evaluations": 20,
       "audit": {
         "tasks": 161,
@@ -21,19 +21,19 @@
     },
     {
       "key": "basic",
-      "title": "快速入门 · 12 Lot",
+      "title": "客户主线 · 12 Lot（推荐）",
       "lots": 12,
-      "wafers": 300,
+      "wafers": 295,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.3,
+      "elapsed": 0.2,
       "evaluations": 18,
       "audit": {
         "tasks": 24,
         "resources": 6,
         "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
       },
-      "forecast": 225,
+      "forecast": 220,
       "alerts": 7
     },
     {
@@ -60,7 +60,7 @@
       "wafers": 300,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.3,
+      "elapsed": 0.2,
       "evaluations": 18,
       "audit": {
         "tasks": 24,
@@ -94,7 +94,7 @@
       "wafers": 3000,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.5,
+      "elapsed": 0.4,
       "evaluations": 20,
       "audit": {
         "tasks": 120,
@@ -111,7 +111,7 @@
       "wafers": 300,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.3,
+      "elapsed": 0.2,
       "evaluations": 18,
       "audit": {
         "tasks": 24,
@@ -128,7 +128,7 @@
       "wafers": 300,
       "passed": true,
       "status": "completed",
-      "elapsed": 0.3,
+      "elapsed": 0.2,
       "evaluations": 18,
       "audit": {
         "tasks": 24,
@@ -145,7 +145,7 @@
       "wafers": 9690,
       "passed": true,
       "status": "completed",
-      "elapsed": 7.4,
+      "elapsed": 6.7,
       "evaluations": 20,
       "audit": {
         "tasks": 1303,
@@ -163,14 +163,14 @@
       "passed": true,
       "status": "timed_out",
       "elapsed": 2.0,
-      "evaluations": 1,
+      "evaluations": 2,
       "audit": {
         "tasks": 5303,
         "resources": 16,
         "checked": "资源不重叠、工序顺序、切换时间、批次身份、来料、wafer 工时、PM/在制/外部占用、月度统计与静置"
       },
-      "forecast": 15555,
-      "alerts": 1965
+      "forecast": 16565,
+      "alerts": 1967
     }
   ],
   "workflows": [

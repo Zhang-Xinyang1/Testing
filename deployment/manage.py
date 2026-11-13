@@ -24,7 +24,7 @@ SERVER = BACKEND / 'server.py'
 REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnostics.py',
                     'scheduler.py', 'optimizer.py', 'platforms.py', 'input_rules.py',
                     'input_errors.py', 'schedule_history.py', 'task_overrides.py',
-                    'production.py', 'production_rules.py', 'production_demo.py', 'production_jobs.py')
+                    'production.py', 'production_rules.py', 'production_demo.py', 'production_excel.py', 'production_chart.py', 'production_jobs.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',

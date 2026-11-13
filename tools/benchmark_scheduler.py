@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare greedy/search on the current input under bounded production windows."""
+"""Compare the legacy engines using a separate reproducible large fixture."""
 import argparse
 import copy
 import hashlib
@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 from diagnostics import inspect_run
 from optimizer import objective
 from scheduler import run
-from server_core import build_payload
+from legacy_case import build_payload
 
 
 def main():

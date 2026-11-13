@@ -27,6 +27,7 @@
   }
 
   function openLotDrawer(lotKey) {
+    if(A.isProductionView&&A.isProductionView()){A.openProductionLot(lotKey);return;}
     var lot = A.state.result.lots.filter(function (l) { return l.key === lotKey; })[0] ||
       A.state.result.lots.filter(function (l) { return l.id === lotKey; })[0];
     if (!lot) return;
@@ -68,6 +69,7 @@
   }
 
   function openBatchDrawer(batchId) {
+    if(A.isProductionView&&A.isProductionView()){A.openProductionBatch(batchId);return;}
     var b = A.state.result.batches.filter(function (x) { return x.id === batchId; })[0];
     if (!b) return;
     var html = '<div class="detail-hero"><div class="detail-hero-top"><span class="pill amber">' + esc(b.recipe) + '</span><h3>' + esc(b.id) + '</h3></div>' +
@@ -121,18 +123,18 @@
     var grange = e.target.closest('[data-gantt-range] button');
     if (grange) {
       A.state.gantt.range = grange.getAttribute('data-range');
-      if (A.state.gantt.range === 'month') A.state.gantt.anchor = A.state.result.start;
+      if (A.state.gantt.range === 'month') A.state.gantt.anchor = A.ganttResult().start;
       A.renderGantt(); return;
     }
     var gnav = e.target.closest('[data-gantt-nav]');
     if (gnav) {
-      var span = A.ganttWindow(A.state.result, A.state.gantt);
+      var span = A.ganttWindow(A.ganttResult(), A.state.gantt);
       if (span.fullMonth) return;
-      A.state.gantt.anchor = Math.max(A.state.result.start,
-        Math.min(A.state.result.monthEnd - span.days * DAY, span.start + Number(gnav.getAttribute('data-gantt-nav')) * span.days * DAY));
+      A.state.gantt.anchor = Math.max(A.ganttResult().start,
+        Math.min(A.ganttResult().monthEnd - span.days * DAY, span.start + Number(gnav.getAttribute('data-gantt-nav')) * span.days * DAY));
       A.renderGantt(); return;
     }
-    if (e.target.closest('[data-gantt-month]')) { A.state.gantt.anchor = A.state.result.start; A.renderGantt(); return; }
+    if (e.target.closest('[data-gantt-month]')) { A.state.gantt.anchor = A.ganttResult().start; A.renderGantt(); return; }
     var sheet = e.target.closest('[data-inputs-sheet]');
     if (sheet) { A.selectInputSheet(sheet.getAttribute('data-inputs-sheet')); return; }
     var exp = e.target.closest('[data-export]');
@@ -169,6 +171,7 @@
   }
 
   function buildCsv(kind) {
+    if(A.unifiedEnabled&&!A.state.historyId)return A.buildProductionCsv(kind);
     var lines = [], filename = '';
     var csvDate = A.SCHED.isoDate;
     if (kind === 'mps') {
@@ -202,7 +205,7 @@
     return {filename:filename, text:'\ufeff' + lines.join('\r\n')};
   }
   function exportCsv(kind) {
-    if (!A.state.result) { A.toast('尚无排产结果，请先排产再导出'); return; }
+    if (A.unifiedEnabled&&!A.state.historyId ? !A.productionPlan() : !A.state.result) { A.toast('尚无选用方案，请先试排并选用再导出'); return; }
     var csv = buildCsv(kind);
     var blob = new Blob([csv.text], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
@@ -234,6 +237,6 @@
   var resizeTimer = null;
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function () { if (A.state.view === 'gantt' && A.state.result) A.drawGantt(); }, 120);
+    resizeTimer = setTimeout(function () { if (A.state.view === 'gantt' && A.ganttResult()) A.drawGantt(); }, 120);
   });
 })();

@@ -17,6 +17,8 @@ from production import (read_state, update as production_update, adopt as produc
                         daily_check, archive as archive_production, read_plan)
 from production_jobs import TrialJobs
 from production_demo import demo_catalog, check_examples
+from production_excel import excel_snapshot
+from production_chart import chart_projection
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -56,7 +58,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/data':
                 return self._json(build_payload(self.server.config_path))
             if path == '/api/production':
-                return self._json(read_state(self.server.config_path))
+                state=read_state(self.server.config_path)
+                if not state.get('snapshot') and not state.get('selectedSource'):
+                    try:
+                        state=production_update(self.server.config_path,'excel',excel_snapshot(build_payload(self.server.config_path)))
+                    except (ValueError,OSError,KeyError) as error:
+                        state['inputLoadError']=str(error)
+                return self._json(self.production_state(state))
             if path == '/api/production/job':
                 return self._json({'job':self.production_jobs().read()})
             if path == '/api/production/demo-catalog':
@@ -117,8 +125,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({'ok': True, 'data': payload})
                 if payload.get('planIssues'):
                     raise ValueError('；'.join(payload['planIssues'][:5]))
-                self.persist_config(cfg)
-            return self._json({'ok': True, 'data': payload, 'config': public_config(self.server.config_path)})
+                if not hasattr(self.server, 'trial_jobs'):
+                    self.server.trial_jobs = TrialJobs()
+                jobs = self.server.trial_jobs
+                with jobs.lock:
+                    if jobs.job and jobs.job['status']=='running':
+                        raise ValueError('请先完成或取消当前试排，再保存 Excel 配置')
+                    prior=read_state(self.server.config_path)
+                    # A different workbook must not inherit confirmations for the previous file.
+                    old_config=load_config(self.server.config_path)
+                    same_file=old_config.get('dataSource',{}).get('path')==cfg.get('dataSource',{}).get('path')
+                    options=((prior.get('snapshot') or {}).get('excelOptions') or {}) if same_file and (prior.get('snapshot') or {}).get('source')=='excel' else {}
+                    snapshot=excel_snapshot(payload,options)
+                    self.persist_config(cfg)
+                    state=production_update(self.server.config_path,'excel',snapshot)
+                    jobs.clear()
+            return self._json({'ok': True, 'data': payload, 'config': public_config(self.server.config_path),
+                               'production':self.production_state(state)})
         except Exception as e:
             return self._json(error_response(e), 400)
 
@@ -148,6 +171,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.trial_jobs = TrialJobs()
             return self.server.trial_jobs
 
+    def production_state(self, state):
+        state=dict(state)
+        state['chart']=chart_projection(state['active']) if state.get('active') else None
+        return state
+
     def production_post(self, action):
         from urllib.parse import urlsplit
         origin = self.headers.get('Origin')
@@ -162,24 +190,28 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('请求必须为对象')
             if action == 'demo-check':
                 return self._json(check_examples())
-            if action == 'demo':
+            if action in ('demo','source','excel','snapshot'):
                 jobs=self.production_jobs()
                 with jobs.lock:
                     if jobs.job and jobs.job['status']=='running':
                         raise ValueError('请先取消当前试排，再切换演示场景')
+                    if action=='excel':body=excel_snapshot(build_payload(self.server.config_path),body)
                     result=production_update(self.server.config_path,action,body)
                     jobs.clear()
-                return self._json(result)
+                return self._json(self.production_state(result))
             if action == 'trial':
-                return self._json({'job':self.production_jobs().start(read_state(self.server.config_path),body)})
+                jobs=self.production_jobs()
+                with jobs.lock:
+                    job=jobs.start(read_state(self.server.config_path),body)
+                return self._json({'job':job})
             if action == 'cancel':
                 return self._json({'job':self.production_jobs().cancel(body.get('id'))})
             if action == 'adopt':
                 plan = self.production_jobs().plan(body.get('id'))
-                return self._json(production_adopt(self.server.config_path,plan,body.get('reason','')))
+                return self._json(self.production_state(production_adopt(self.server.config_path,plan,body.get('reason',''))))
             if action == 'archive':
-                return self._json(archive_production(self.server.config_path,self.production_jobs().plan(body.get('id'))))
-            return self._json(production_update(self.server.config_path,action,body))
+                return self._json(self.production_state(archive_production(self.server.config_path,self.production_jobs().plan(body.get('id')))))
+            return self._json(self.production_state(production_update(self.server.config_path,action,body)))
         except Exception as error:
             return self._json(error_response(error),400)
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from test_import_case import export_sheets, write_export
 from test_platforms import platform_case
 from server_core import build_payload, load_config, validate_schedule
+from legacy_case import build_payload, load_config
 
 
 class DateInputTests(unittest.TestCase):

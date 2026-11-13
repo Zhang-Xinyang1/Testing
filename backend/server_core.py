@@ -338,7 +338,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
 
     _, borrow_rows = rows_of('borrow')
     borrow = [{'date': get(r, 'borrow', 'date', ''), 'eqp': str(get(r, 'borrow', 'eqp', '')).strip(),
-               'hours': getn(r, 'borrow', 'hours', 0)} for r in borrow_rows]
+               'hours': getn(r, 'borrow', 'hours', 0),
+               'recipe': optional_column(r, 'borrow', 'recipe', 'Recipe'),
+               'start': optional_column(r, 'borrow', 'start', 'Start')} for r in borrow_rows]
 
     _, weekly_rows = rows_of('weekly')
     weekly = []
@@ -402,6 +404,18 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
     next_month = '%04d-%02d-01' % (ny, nm)
     start_dt = datetime.strptime(month_start, '%Y-%m-%d')
     lots = []
+    production_facts = []
+    _, metadata_rows = rows_of('production')
+    if len(metadata_rows) > 1:
+        raise ValueError('生产信息表只允许一条数据时点记录')
+    production_meta = {}
+    if metadata_rows:
+        row = metadata_rows[0]
+        stable = str(optional_column(row, 'production', 'identityStable', 'Identity Stable')).strip().lower()
+        if stable not in ('', 'true', 'false', '1', '0'):
+            raise ValueError('生产信息 Identity Stable 请填写 TRUE 或 FALSE')
+        production_meta = {'asOf': optional_column(row, 'production', 'asOf', 'AsOf'),
+                           'identityStable': stable in ('true', '1')}
     if lot_rows:
         for index, r in enumerate(lot_rows, 1):
             lid = str(get(r, 'lots', 'lotId', '')).strip()
@@ -422,6 +436,16 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
                 get(r, 'lots', 'monthlyDue', '') or next_month,
                 int(getn(r, 'lots', 'priority', 1)),
             ])
+            columns = {'uid':'UID','state':'State','availableAt':'Release Time',
+                       'shipDue':'Ship Due','location':'Location','holdReason':'Hold Reason',
+                       'actualComplete':'Actual Complete','externalComplete':'External Complete',
+                       'currentEqp':'Current EQP','currentChamber':'Current Chamber',
+                       'currentStep':'Current Step','currentRecipe':'Current Recipe',
+                       'currentCard':'Current Card','currentStart':'Current Start','currentEnd':'Current End'}
+            fact = {key:optional_column(r, 'lots', key, header) for key,header in columns.items()}
+            fact['availableAt'] = fact['availableAt'] or get(r, 'lots', 'release', '')
+            fact['shipDue'] = fact['shipDue'] or get(r, 'lots', 'monthlyDue', '')
+            production_facts.append(fact)
     else:
         for m in mps:
             # This is a fallback assumption, not a restriction on actual Lot sizes.
@@ -452,7 +476,8 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
         'pm': pm, 'borrow': borrow, 'weekly': weekly, 'constraints': constraints,
         'lotFields': ['LotID', 'PROD', 'Platform', 'Wafer Qty', 'Release Time', 'Target Week',
                       'Weekly Due', 'Monthly Due', 'Priority'],
-        'lots': lots, 'platformType': platform_type, 'cardType': card_type,
+        'lots': lots, 'productionFacts':production_facts, 'productionMeta':production_meta,
+        'platformType': platform_type, 'cardType': card_type,
         'rules': rules, 'sheetSummary': summary, 'fieldMap': fm, 'sheetMap': smap,
     }
     overrides = cfg.get('scheduling', {})
@@ -466,6 +491,9 @@ def build_payload(config_path=DEFAULT_CONFIG, config=None):
             payload[key] = overrides[key]
     _, wip_rows = rows_of('wip')
     wip = [{key: get(r, 'wip', key, '') for key in ('lotId', 'lotKey', 'eqp', 'chamber', 'card', 'start', 'end')} for r in wip_rows]
+    for item, row in zip(wip, wip_rows):
+        item['step']=optional_column(row,'wip','step','Step')
+        item['recipe']=optional_column(row,'wip','recipe','Recipe')
     payload['wip'] = overrides.get('wip', wip)
     payload['taskOverrides'] = overrides.get('taskOverrides', [])
     payload = normalize_platforms(payload)
@@ -670,8 +698,11 @@ def validate_schedule(data):
         location = {'table': 'mps', 'record': record, 'sheet': (data.get('sheetMap') or {}).get('mps')}
         require(number(m['mps']) and m['mps'] == int(m['mps']) and m['mps'] >= 0,
                 'MPS 必须为非负整数 wafer 数')
-        require(wafer_totals.get(m['ppn'], 0) == m['mps'],
-                '产品 Lot 的 wafer 合计必须等于 MPS：' + m['ppn'])
+        # Actual inventory is independent of the demand target. Only synthetic
+        # MPS splitting must conserve the target's exact wafer count.
+        if (data.get('meta') or {}).get('lotSizing') != 'actual':
+            require(wafer_totals.get(m['ppn'], 0) == m['mps'],
+                    '产品 Lot 的 wafer 合计必须等于 MPS：' + m['ppn'])
         validate_platform(m['platform'], 'PPN ' + m['ppn'])
         location = {'table': 'flow', 'sheet': (data.get('sheetMap') or {}).get('flow'), 'field': m['ppn']}
         require(m['ppn'] in data['flows'], '产品缺少路线：' + m['ppn'])

@@ -4,7 +4,7 @@
   var A = window.TSApp, esc = A.esc;
   function sources(record) { return record.sourcePlans || [record]; }
   function time(value) { return A.SCHED.isoDate(typeof value === 'number' ? value : A.SCHED.parseDate(value)) || '未指定'; }
-  function records() { return (A.state.result || {}).pmRecords || []; }
+  function records() { return ((A.ganttResult?A.ganttResult():A.state.result) || {}).pmRecords || []; }
 
   A.pmSources = sources;
   A.pmRecordsFor = function (resource, start, end) {
@@ -13,7 +13,7 @@
     });
   };
   A.pmTraceHTML = function () {
-    if (!A.state.result) return '';
+    if (!(A.ganttResult?A.ganttResult():A.state.result)) return '';
     var plans = records(), originalCount = plans.reduce(function (n, p) { return n + sources(p).length; }, 0);
     return '<details class="config-details"><summary>PM 执行对应关系 · 维护任务 ' + originalCount + ' 条 → 组合停机 ' + plans.length + ' 次</summary>' +
       '<p class="config-hint">Probe 与 EQP 为组合设备，任一部件维护都会整组停机。重叠时仅合并停机区间，各部件的维护任务均保留；连带停机不表示该部件也新增一项维护。PM 编号按本次输入顺序生成。</p>' +

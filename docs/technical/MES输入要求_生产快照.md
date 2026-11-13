@@ -1,19 +1,21 @@
 # MES 生产快照业务字段 v1
 
-更新：2026-11-12。本契约用于新入口“生产看板 / Lot 查询 / 滚动重排”。Excel 排程沿用原导入方式和历史业务规则；两套工作区不混用输入或方案。当前提供 JSON 接收验证，MES 拉取、认证及计划下发尚未接入。
+更新：2026-11-13。Excel、MES、演示共用本生产快照、试排与选用流程，看板、MPS、甘特、Lot 查询共用选用方案。来源分别保留快照和选用状态，切换时恢复，不叠加生产。当前提供 JSON 接收验证，MES 拉取、认证及计划下发尚未接入。
 
 ## 操作与接口
 
 启动后打开 `/#production`，选择内置场景并点击“载入所选场景”，进入“滚动重排 → 开始试排”。完成后查看产品差额、Lot 变化和借机 Recipe，再确认说明并选用。演示说明已预填，现场说明需人工填写。刷新页面及定时检查都不会启动排产。
 
-实际数据在“滚动重排 → 生产规则与 MES → 粘贴快照进行接收验证”提交。空工作区也可直接接收。演示数据全部合成；实际 MES 工作区不能通过“载入所选场景”被覆盖。切换数据来源或计划月份时清空当前选用状态，保留历史记录。
+实际数据在“滚动重排 → 生产规则与 MES → 粘贴快照进行接收验证”提交。空工作区也可直接接收。演示数据全部合成；实际 MES 工作区不能通过“载入所选场景”被覆盖。先用页面顶部来源按钮切换。切换来源恢复该来源已有状态；该来源更换计划月份才清空当前选用状态，历史记录保留。
 
 | 方法与路径 | 用途 |
 |---|---|
-| `GET /api/production` | 已接收快照、规则、已选方案、最近 50 条方案摘要、变化与检查状态 |
+| `GET /api/production` | 快照、规则、已选方案 active、甘特 chart（planId 与 active.id 一致）、历史、变化与检查状态；首次空工作区读取已保存 Excel，不计算 |
+| `POST /api/production/source` | `{"source":"excel"}` 或 mes / demo，切换并恢复该来源状态；计算中拒绝切换 |
+| `POST /api/production/excel` | 接收已保存 Excel；可带 asOf、defaultAvailableAt、defaultShipDue、confirmPlannedLots、identityStable 补充信息，不自动试排 |
 | `POST /api/production/snapshot` | 接收完整快照；不接受零散增量，不自动试排 |
 | `GET /api/production/demo-catalog` | 10 个场景及 6 种变化的目录，不生成计划 |
-| `POST /api/production/demo` | 如 `{"case":"full"}`，载入综合数据与该场景规则；省略 case 保持兼容载入 basic。清空当前选用、保留历史；计算中拒绝切换 |
+| `POST /api/production/demo` | 推荐 `{"case":"basic"}`，载入 12 Lot 客户主线数据与该场景规则；省略 case 保持兼容载入 basic。清空当前选用、保留历史；计算中拒绝切换 |
 | `POST /api/production/demo-event` | 如 `{"event":"arrival_known"}`，自动生成演示变化；只改演示快照，不自动试排 |
 | `POST /api/production/demo-check` | `{}`，检查 20 个内置输入样例，只读、不排产，返回逐项预期与实际结果 |
 | `POST /api/production/rules` | 保存生产规则；规则对象见下文 |
@@ -184,3 +186,9 @@
 `event`：`arrival_known`（未知来料确认 24 小时后到位）、`arrival_delay`（既有来料延后 48 小时）、`due_urgent`（待排 Lot 交期提前到 2 小时后）、`machine_down`（选择无当前承诺的 CP 停机 12 小时）、`external_forecast`（补充在制外部完工预测）、`release_hold`（放行 HOLD）。时间均相对快照时点自动生成；综合场景覆盖全部六种。每种变化每次载入只能应用一次，不适用的场景明确拒绝。事件保留已选基线、使旧候选失效，并记录生成的具体对象和原因。
 
 输入自检的拒绝样例不会保存到工作区。普通手工来料/交期修改只允许 READY/FUTURE，不得把 DONE/RUNNING/HOLD 改回待排；HOLD 放行用明确放行事件或新 MES 快照。再次保存已选候选为比较记录，不覆盖原选用理由。
+
+## Excel 接入与共用展示
+
+Excel 通过适配器转换为 source=excel 的相同结构；MES 继续传 source=mes。详细列名和缺失字段处理见 [统一排产与客户演示](../统一排产与客户演示.md)。Excel 新增生产信息表提供 AsOf、Identity Stable；Lot 明细使用 UID 区分重复 LotID。库存与 MPS 目标独立，缺交期／明确可用时间时不安排新加工。在制当前占用必须完整；PM／借机等资源事实不完整时阻止试排。
+
+接口保存和选用返回 chart，它由 active 只读投影产生，不能单独替换或独立排产。选用前所有结果仍显示旧方案并提示输入变化；选用后统一更新。CSV 导出包含方案编号，Lot 导出还包含 UID。

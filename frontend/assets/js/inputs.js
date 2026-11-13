@@ -3,7 +3,7 @@
   'use strict';
   var A = window.TSApp;
   var $ = A.$, esc = A.esc, num = A.num;
-  var SHEETS = {mps:'MPS', eqp:'EQP', cards:'针卡', flow:'测试flow&工时', borrow:'借机计划', pm:'PM计划', constraints:'约束条件', params:'算例参数', lots:'Lot明细', weekly:'周目标', wip:'在制'};
+  var SHEETS = {mps:'MPS', eqp:'EQP', cards:'针卡', flow:'测试flow&工时', borrow:'借机计划', pm:'PM计划', constraints:'约束条件', params:'算例参数', lots:'Lot明细', weekly:'周目标', wip:'在制', production:'生产信息'};
   function sheetRole(name) {
     var map = A.state.data.sheetMap || SHEETS;
     return Object.keys(map).find(function (key) { return A.sheetKey(map[key]) === A.sheetKey(name); });
@@ -25,7 +25,7 @@
   function renderInputs() {
     if (A.captureConfigurationDraft) A.captureConfigurationDraft();
     if (!A.state.data) {
-      $('#view-inputs').innerHTML = '<div class="error-box"><b>数据读取失败</b>\n' + esc(A.state.loadError || '暂无有效数据') + '\n可重新导入 Excel、修正字段映射或手工配置，然后保存并排产。</div>' + A.configurationHTML();
+      $('#view-inputs').innerHTML = '<div class="error-box"><b>数据读取失败</b>\n' + esc(A.state.loadError || '暂无有效数据') + '\n可重新导入 Excel、修正字段映射或手工配置，然后保存并前往试排。</div>' + A.configurationHTML();
       if (A.setupConfigurationWorkflow) A.setupConfigurationWorkflow();
     if (A.restoreConfigurationDraft) A.restoreConfigurationDraft();
     if (A.refreshMappingControls) A.refreshMappingControls();
@@ -38,7 +38,7 @@
       '<div class="source-sub">' + esc(meta.month || '') + ' · ' + num(d.lots.length) + ' lot · ' + sheets.length + ' 张表</div></div>' +
       '<div class="source-actions"><button class="btn small source-import" id="inputs-import" type="button">Excel 导入</button>' +
       '<span class="pill green">Excel 只读</span>' +
-      '<button class="btn ghost small" data-export="mps">导出 MPS</button><button class="btn ghost small" data-export="lots">导出排产</button><button class="btn ghost small" data-export="pm">导出 PM 对应明细</button></div></div>';
+      (A.unifiedEnabled?'<button class="btn ghost small" data-open-view="production">返回当前选用方案与导出</button>':'<button class="btn ghost small" data-export="mps">导出 MPS</button><button class="btn ghost small" data-export="lots">导出排产</button><button class="btn ghost small" data-export="pm">导出 PM 对应明细</button>')+'</div></div>';
 
     html += A.configurationHTML();
     html += '<details class="config-details"><summary>数据预览</summary>';
@@ -51,7 +51,7 @@
     '</div></details>';
 
     html += '<details class="config-details"><summary>输入核验</summary><div class="check-list">' + validationHTML() + '</div></details>';
-    if (A.pmTraceHTML) html += A.pmTraceHTML();
+    if (A.pmTraceHTML && !A.unifiedEnabled) html += A.pmTraceHTML();
     $('#view-inputs').innerHTML = html;
     if (A.setupConfigurationWorkflow) A.setupConfigurationWorkflow();
     if (A.restoreConfigurationDraft) A.restoreConfigurationDraft();
@@ -84,13 +84,18 @@
       Object.keys(d.flows).forEach(function (p) { d.flows[p].forEach(function (op) { rows.push([p, op[0], op[1], op[2]]); }); });
       return { fields: mappedFields(sheetMap.flow || '测试flow&工时', ['PROD', 'STEP', 'RECIPE', 'TIME'], ['prod', 'step', 'recipe', 'time']), rows: rows };
     }
-    if (name === '借机计划') return { fields: ['DATE', 'EQPID', '借机时数', 'Generated At'], rows: d.borrow.map(function (x) { return [x.date, x.eqp, x.hours, x.generatedAt || '']; }) };
+    if (name === '借机计划') return { fields: ['DATE', 'EQPID', '借机时数', 'Recipe', 'Start'], rows: d.borrow.map(function (x) { return [x.date, x.eqp, x.hours, x.recipe || '', x.start || '']; }) };
     if (name === 'PM计划') return { fields: ['维护对象（EQPID / proberID）', 'TargetKind', 'Early Due', 'Due Date', 'Over Due', 'Estimated Hours', 'Start'], rows: d.pm.map(function (x) { return [x.eqp, x.targetKind || '自动识别', x.early, x.due, x.over, x.hours, x.start || '']; }) };
     if (name === '约束条件') return { fields: ['TYPE', 'EQPID', 'Constraint Recipe'], rows: (d.constraints || []).map(function (x) { return [x.type, x.eqp, x.recipe]; }) };
     if (name === '算例参数') return { fields: ['类别', '参数', '对象', '值', '单位', '依据'], rows: (d.rules || []).map(function (x) { return [x.category, x.parameter, x.object, x.value, x.unit, x.basis]; }) };
+    if (name === 'Lot明细' && (d.productionFacts||[]).length) {
+      var keys=['uid','state','availableAt','shipDue','location','holdReason','actualComplete','externalComplete','currentEqp','currentChamber','currentStep','currentRecipe','currentCard','currentStart','currentEnd'];
+      return {fields:['LotID','PROD','Platform','Wafer Qty'].concat(keys),rows:d.lots.map(function(row,i){var fact=d.productionFacts[i]||{};return row.slice(0,4).concat(keys.map(function(k){return fact[k]||'';}));})};
+    }
     if (name === 'Lot明细') return { fields: d.lotFields || [], rows: d.lots };
+    if (name === '生产信息') return {fields:['AsOf','Identity Stable'],rows:d.productionMeta?[[d.productionMeta.asOf,d.productionMeta.identityStable]]:[]};
     if (name === '周目标') return { fields: ['Platform', 'PPN', 'Week', 'Week Start', 'Week End', 'Target Wafers'], rows: d.weekly.map(function (x) { return [x.platform, x.ppn, x.week, x.start, x.end, x.target]; }) };
-    if (name === '在制') return { fields: ['LotID', 'LotKey', 'EQPID', 'Chamber', 'Card', 'Start', 'End'], rows: (d.wip || []).map(function (x) { return [x.lotId, x.lotKey, x.eqp, x.chamber, x.card, x.start, x.end]; }) };
+    if (name === '在制') return { fields: ['LotID', 'LotKey', 'EQPID', 'Chamber', 'Card', 'Step', 'Recipe', 'Start', 'End'], rows: (d.wip || []).map(function (x) { return [x.lotId, x.lotKey, x.eqp, x.chamber, x.card, x.step, x.recipe, x.start, x.end]; }) };
     return { fields: [], rows: [], unmapped:true };
   }
 
@@ -138,11 +143,12 @@
     if (wrap) wrap.innerHTML = inputsPreviewHTML();
   }
   function validationHTML() {
-    var d = A.state.data, r = A.state.result;
+    var d = A.state.data, r = A.unifiedEnabled ? null : A.state.result;
     var checks = [];
     var mpsSum = (d.mps || []).reduce(function (a, x) { return a + x.mps; }, 0);
     var waferSum=d.lots.reduce(function(s,l){return s+l[3];},0);
-    checks.push([mpsSum === waferSum && d.lots.every(function(l){return Number.isInteger(l[3])&&l[3]>=1&&l[3]<=25;}), 'MPS 与 Lot wafer 合计一致：' + num(mpsSum) + ' / ' + num(waferSum) + ' wafer，拆为 ' + num(d.lots.length) + ' Lot（每 Lot 最多25片）']);
+    var actual=(d.meta||{}).lotSizing==='actual';
+    checks.push([(actual||mpsSum === waferSum) && d.lots.every(function(l){return Number.isInteger(l[3])&&l[3]>=1&&l[3]<=25;}), (actual?'MPS 目标 / 实际 Lot（独立统计）：':'MPS 与拆批 wafer 合计一致：') + num(mpsSum) + ' / ' + num(waferSum) + ' wafer，共 ' + num(d.lots.length) + ' Lot（每 Lot 最多25片）']);
     checks.push([Object.keys(d.flows).length === (d.mps || []).length, '工艺覆盖：' + Object.keys(d.flows).length + ' 个 PROD / ' + (d.mps || []).length + ' 个 PPN']);
     var flowRows = Object.keys(d.flows).reduce(function (a, p) { return a + d.flows[p].length; }, 0);
     checks.push([flowRows > 0, '工艺记录：' + flowRows + ' 行' + (r ? '，展开 ' + num(r.metrics.cpOps) + ' 道 CP 工序' : '，尚无排产结果')]);

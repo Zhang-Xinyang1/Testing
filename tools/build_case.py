@@ -12,7 +12,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / 'data/Testing调度算例_新版.xlsx'
+OUTPUT = ROOT / 'output/Testing调度算例_规模回归.xlsx'
 MANIFEST = ROOT / '.artifacts/case_manifest.json'
 
 

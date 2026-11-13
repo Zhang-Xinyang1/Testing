@@ -15,6 +15,7 @@ from input_rules import resolve_pm_target
 from scheduler import HOUR, run
 from server import Handler
 from server_core import build_payload, calendar_issues, load_config, validate_schedule
+from legacy_case import build_payload, load_config
 
 
 def pm(eqp, **extra):

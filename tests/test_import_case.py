@@ -13,6 +13,7 @@ from diagnostics import inspect_run
 from platforms import normalize_platforms
 from scheduler import run
 from server_core import build_payload, load_config, rows_for, validate_schedule
+from legacy_case import build_payload, load_config
 
 
 def export_sheets():
