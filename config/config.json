@@ -1,0 +1,75 @@
+{
+  "dataSource": {
+    "type": "excel",
+    "path": "data/Testing调度算例_新版.xlsx",
+    "month": "2026-09",
+    "sheetMap": {
+      "mps": "MPS",
+      "eqp": "EQP",
+      "cards": "针卡",
+      "flow": "测试flow&工时",
+      "borrow": "借机计划",
+      "pm": "PM计划",
+      "constraints": "约束条件"
+    },
+    "headerRow": 1
+  },
+  "fieldMap": {
+    "MPS": {
+      "platform": "Platform",
+      "ppn": "PPN",
+      "mps": "MPS"
+    },
+    "EQP": {
+      "type": "TYPE",
+      "id": "EQPID",
+      "currentCard": "Current ProbeCard",
+      "currentRecipe": "Current Recipe",
+      "status": "Status"
+    },
+    "针卡": {
+      "recipe": "Recipe",
+      "cards": "ProbeCard List",
+      "separator": ";"
+    },
+    "测试flow&工时": {
+      "prod": "PROD",
+      "step": "STEP",
+      "recipe": "RECIPE",
+      "time": "Time"
+    },
+    "借机计划": {
+      "date": "DATE",
+      "eqp": "EQPID",
+      "hours": "借机时数"
+    },
+    "PM计划": {
+      "eqp": "EQP ID",
+      "early": "Early Due",
+      "due": "Due Date",
+      "over": "Over Due",
+      "hours": "Estimated Hours"
+    },
+    "约束条件": {
+      "type": "TYPE",
+      "eqp": "EQPID",
+      "recipe": "Constraint Recipe"
+    }
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "scheduling": {
+    "bakeResources": {
+      "machines": 7,
+      "chambers": 4
+    },
+    "platformType": {
+      "CP-A": "CP-A",
+      "CP-B": "CP-B",
+      "CP-C": "CP-C"
+    },
+    "rulesVersion": "confirmed-2026-11-06"
+  }
+}

@@ -1,0 +1,9 @@
+# XMC Testing 排产
+# Python >= 3.9 (verified on 3.9.6)
+#
+# Runtime dependencies: none. The service uses the Python standard library only.
+# numpy, pandas and openpyxl are not imported by the current code.
+#
+# Optional PPT-generation dependency, not needed to run the service:
+# tools/build_rules_ppt.py imports python-pptx.
+# python-pptx

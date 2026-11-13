@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XMC · 测试排产</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6bff'/%3E%3Cpath d='M9 10h9M9 16h14M9 22h6' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/styles.css">
+  <link rel="stylesheet" href="assets/enterprise.css">
+  <script>
+    window.addEventListener('error', function (e) {
+      document.title = 'JS ERROR: ' + e.message;
+      var el = document.getElementById('loading-sub');
+      if (el) el.textContent = 'JS ERROR: ' + e.message + ' @ ' + (e.filename || '') + ':' + (e.lineno || '');
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      document.title = 'PROMISE ERROR: ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+      var el = document.getElementById('loading-sub');
+      if (el) el.textContent = 'PROMISE ERROR: ' + (e.reason && e.reason.stack ? e.reason.stack : e.reason);
+    });
+  </script>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-logo-window"><img class="brand-logo" src="assets/brand/xmc-logo-official.png" width="2865" height="456" alt="XMC"></span>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="mps">
+        <span class="nav-ico" data-icon="target"></span><span>MPS 结果</span>
+      </button>
+      <button class="nav-item" data-view="gantt">
+        <span class="nav-ico" data-icon="gantt"></span><span>排产甘特</span>
+      </button>
+      <button class="nav-item" data-view="inputs">
+        <span class="nav-ico" data-icon="database"></span><span>数据配置</span>
+      </button>
+      <button class="nav-item" data-view="diagnostics"><span class="nav-ico">◎</span><span>排产诊断</span></button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="source-card">
+        <div class="source-top"><span class="dot live"></span><span id="source-status">算例数据已载入</span></div>
+        <div class="source-name" id="source-name">Testing调度算例_新版.xlsx</div>
+        <div class="source-meta" id="source-meta">2026-09 · 11,575 lots</div>
+      </div>
+      <div class="demo-note" id="source-note">内置算例</div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 id="page-title">MPS 结果</h1>
+        <p id="page-sub">2026 年 9 月 · 月度 MPS 与排产结果</p>
+      </div>
+      <div class="topbar-right">
+        <div class="run-chip" id="run-chip">正在排产…</div>
+        <button class="btn ghost" id="btn-import" type="button">Excel 导入</button>
+        <button class="btn ghost" id="btn-settings" type="button">排产设置</button>
+        <button class="btn primary" id="btn-run" type="button">重新排产</button>
+      </div>
+    </header>
+
+    <main class="content" id="content">
+      <section class="view active" id="view-mps"></section>
+      <section class="view" id="view-gantt"></section>
+      <section class="view" id="view-inputs"></section>
+      <section class="view" id="view-diagnostics"></section>
+    </main>
+  </div>
+</div>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-kicker" id="drawer-kicker">详情</div>
+      <h2 id="drawer-title">—</h2>
+    </div>
+    <button class="icon-btn" id="drawer-close" type="button" aria-label="关闭">×</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+<div class="drawer-scrim" id="drawer-scrim"></div>
+
+<div class="modal" id="modal" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        
+        <h2>排产设置</h2>
+      </div>
+      <button class="icon-btn" id="modal-close" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="modal-cancel" type="button">取消</button>
+      <button class="btn primary" id="modal-apply" type="button">应用并排产</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="loading" id="loading">
+  <div class="loading-card">
+    <div class="spinner"></div>
+    <div class="loading-title" id="loading-title">正在排产</div>
+    <div class="loading-sub" id="loading-sub">请稍候…</div>
+  </div>
+</div>
+
+<script src="assets/data.js"></script>
+<script src="assets/data-loader.js"></script>
+<script src="assets/schedule-client.js"></script>
+<script src="assets/js/core.js"></script>
+<script src="assets/js/diagnostics.js"></script>
+<script src="assets/js/mps.js"></script>
+<script src="assets/js/gantt.js"></script>
+<script src="assets/js/configuration.js"></script>
+<script src="assets/js/inputs.js"></script>
+<script src="assets/js/ui.js"></script>
+</body>
+</html>

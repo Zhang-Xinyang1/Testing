@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="560" viewBox="0 0 560 560" fill="none">
+  <defs>
+    <pattern id="dies" width="34" height="34" patternUnits="userSpaceOnUse" patternTransform="rotate(-16 280 280)">
+      <rect x="3" y="3" width="28" height="28" rx="2" stroke="#b9e8dc" stroke-opacity=".34"/>
+      <path d="M7 12h8v8h8M19 7v5h8" stroke="#b9e8dc" stroke-opacity=".2"/>
+    </pattern>
+    <clipPath id="wafer"><circle cx="280" cy="280" r="235"/></clipPath>
+  </defs>
+  <circle cx="280" cy="280" r="265" stroke="#b9e8dc" stroke-opacity=".13" stroke-dasharray="2 12"/>
+  <circle cx="280" cy="280" r="245" stroke="#b9e8dc" stroke-opacity=".23"/>
+  <circle cx="280" cy="280" r="235" fill="url(#dies)" stroke="#b9e8dc" stroke-opacity=".3"/>
+  <path d="M40 280h34M486 280h34M280 40v34M280 486v34" stroke="#63d6b6" stroke-opacity=".7"/>
+  <circle cx="280" cy="280" r="220" stroke="#b9e8dc" stroke-opacity=".08"/>
+</svg>
