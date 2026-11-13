@@ -21,6 +21,7 @@ FIELDS = {
     'eqp': ('EQP 设备', [
         ('type', True, 'TYPE，机台组；含 OVEN 表示 BAKE'),
         ('id', True, 'EQPID，唯一'),
+        ('proberId', False, 'proberID；任一部件 PM 均整组停机'),
         ('currentCard', False, 'Current ProbeCard，初始针卡类型'),
         ('currentRecipe', False, 'Current Recipe，初始 Recipe'),
         ('status', False, 'Status，仅 RUN 可排产'),
@@ -41,7 +42,9 @@ FIELDS = {
         ('hours', True, '借机时数，0.6-24 小时'),
     ]),
     'pm': ('PM计划', [
-        ('eqp', True, 'EQP ID，维护机台'),
+        ('eqp', True, 'EQP ID，可填写 EQPID 或 proberID'),
+        ('targetKind', False, 'EQP / PROBER；编号歧义时必填'),
+        ('start', False, 'Start；指定维护开始时间，可选'),
         ('early', True, 'Early Due'),
         ('due', True, 'Due Date'),
         ('over', True, 'Over Due'),

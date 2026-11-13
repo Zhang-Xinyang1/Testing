@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import cmp_to_key, lru_cache
 from platforms import normalize_platforms, split_platforms
-from input_rules import base_ppn, flow_product, ordered_plans, parse_datetime, resolve_wip, row_key
+from input_rules import base_ppn, flow_product, ordered_plans, parse_datetime, pm_events, resolve_wip, row_key
 
 MIN = 60000
 HOUR = 3600000
@@ -338,12 +338,9 @@ def simulate(data, options, policy=None):
                 ctx['cardMap'][card_id] = card
             ctx['cardMap'][card_id]['recipes'][recipe['recipe']] = True
 
-    for index, plan in ordered_plans(data.get('pm') or [], 'pm'):
-        machine = ctx['machineMap'].get(plan['eqp'])
-        resources = [machine] if machine else [
-            chamber for chamber in ctx['chambers'] if chamber['eqp'] == plan['eqp']]
-        if not resources:
-            raise ValueError('PM 未知设备：' + plan['eqp'])
+    pm_resources = {resource['id']: resource for resource in ctx['machines'] + ctx['chambers']}
+    for plan in pm_events(data):
+        resources = [pm_resources[key] for key in plan['resources']]
         blocks = []
         for resource in resources:
             blocks.extend(resource['reserved'])
@@ -355,10 +352,11 @@ def simulate(data, options, policy=None):
                 plan.get('start') and slot != first):
             raise ValueError('PM 窗口内无连续空档：' + plan['eqp'])
         record = {
-            'id': 'PM-' + pad(index + 1), 'eqp': plan['eqp'], 'early': plan['early'],
+            'id': plan['id'], 'eqp': plan['eqp'], 'early': plan['early'],
             'due': plan['due'], 'over': plan['over'], 'hours': plan['hours'],
             'start': slot, 'end': slot + duration, 'status': 'window',
-            'resources': [r['id'] for r in resources],
+            **{key: plan[key] for key in ('targetKind', 'affectedEqps', 'affectedProbers', 'resources',
+                                          'sourceIds', 'sourcePlans', 'merged')},
         }
         ctx['pmRecords'].append(record)
         for resource in resources:
@@ -917,6 +915,8 @@ def finalize(ctx):
         'cardUtil': clamp(card_util, 0, 1), 'setups': setups,
         'setupMinutes': setups * (ctx['options'].get('setupMinutes')
                                   if ctx['options'].get('setupMinutes') is not None else 5),
+        'pmInputCount': len(ctx['data'].get('pm') or []),
+        'pmMergedRows': len(ctx['data'].get('pm') or []) - len(ctx['pmRecords']),
         'pmCount': len(ctx['pmRecords']), 'pmInWindow': pm_in_window,
         'borrowTotal': len(ctx['borrows']), 'borrowScheduled': borrow_scheduled,
         'borrowCanceled': borrow_canceled, 'borrowDelayed': borrow_delayed,

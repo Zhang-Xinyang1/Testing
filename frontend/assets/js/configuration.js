@@ -3,25 +3,31 @@
   'use strict';
   var A = window.TSApp, esc = A.esc, busy = false, pendingUpload = null;
   var schemas = {
-    eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
+    eqp: [['id', 'EQPID'], ['type', 'TYPE'], ['proberId', 'proberID（组合设备）'], ['card', 'Current ProbeCard'], ['recipe', 'Current Recipe'], ['status', 'status', 'status']],
     borrow: [['eqp', '机台', 'machine'], ['date', '借机日期', 'date'], ['hours', '连续小时', 'number']],
-    pm: [['eqp', '固定机台', 'resource'], ['early', '最早日期', 'date'], ['due', '期望日期', 'date'], ['over', '最迟完成日期', 'date'], ['hours', '连续小时', 'number'], ['start', '指定开始（可留空）', 'datetime-local']],
+    pm: [['eqp', '维护对象 EQPID / proberID', 'pmresource'], ['targetKind', '对象类型（空=自动）', 'targetKind'], ['early', '最早日期', 'date'], ['due', '期望日期', 'date'], ['over', '最迟完成日期', 'date'], ['hours', '连续小时', 'number'], ['start', '指定开始（可留空）', 'datetime-local']],
     wip: [['lotId', '在制 LotID'], ['lotKey', '行键（同名 Lot 必填）'], ['eqp', '占用机台（等待可空）', 'resource'], ['chamber', 'BAKE 腔体（CP 留空）'], ['card', '占用针卡（BAKE 留空）'], ['start', '占用开始', 'datetime-local'], ['end', '预计释放', 'datetime-local']]
   };
   function localTime(value) {
     if (!value) return '';
     var ms = A.SCHED.parseDate(value);
-    return isFinite(ms) ? new Date(ms + 8 * A.HOUR).toISOString().slice(0, 16) : '';
+    return isFinite(ms) ? new Date(ms + 8 * A.HOUR).toISOString().slice(0, -1) : '';
   }
-  function iso(value) { return value ? value + ':00+08:00' : ''; }
+  function iso(value) {
+    if (!value) return '';
+    var ms = A.SCHED.parseDate(value);
+    if (!Number.isFinite(ms)) throw new Error('指定时间无效，请核对 PM / 在制时间');
+    return new Date(ms + 8 * A.HOUR).toISOString().replace('Z', '+08:00');
+  }
   function input(id, label, value, type) {
     return '<label class="config-field">' + label + '<input class="input" id="cfg-' + id + '" type="' + (type || 'text') + '" value="' + esc(value == null ? '' : value) + '"></label>';
   }
   function jsonBox(key, label, value) {
     return '<details class="config-details"><summary>' + label + '</summary><textarea class="input config-json" id="cfg-' + key + '">' + esc(JSON.stringify(value, null, 2)) + '</textarea></details>';
   }
-  function resources(bake) {
+  function resources(bake, probers) {
     var d = A.state.data, values = d.eqp.filter(function(m){return bake || !/OVEN/i.test(m.type);}).map(function(m){return m.id;});
+    if (probers) d.eqp.forEach(function(m){if (m.proberId && values.indexOf(m.proberId) < 0) values.push(m.proberId);});
     return values;
   }
   function rowHTML(key, row) {
@@ -29,12 +35,12 @@
       var field = col[0], type = col[2] || 'text', value = row[field] == null ? '' : row[field];
       if (type === 'datetime-local') value = localTime(value);
       var attrs = ' data-field="' + field + '" aria-label="' + esc(col[1]) + '"';
-      if (['status', 'machine', 'resource'].indexOf(type) >= 0) {
-        var values = type === 'status' ? ['', 'RUN', 'LOST'] : [''].concat(resources(type === 'resource'));
+      if (['status', 'machine', 'resource', 'pmresource', 'targetKind'].indexOf(type) >= 0) {
+        var values = type === 'status' ? ['', 'RUN', 'LOST'] : type === 'targetKind' ? ['', 'EQP', 'PROBER'] : [''].concat(resources(type !== 'machine', type === 'pmresource'));
         if (values.indexOf(value) < 0) values.push(value);
         return '<td><select class="select"' + attrs + '>' + values.map(function (v) { return '<option value="' + esc(v) + '"' + (v === value ? ' selected' : '') + '>' + esc(v || '—') + '</option>'; }).join('') + '</select></td>';
       }
-      return '<td><input class="input"' + attrs + ' type="' + type + '"' + (type === 'number' ? ' min="0.01" step="any"' : '') + ' value="' + esc(value) + '"></td>';
+      return '<td><input class="input"' + attrs + ' type="' + type + '"' + (type === 'number' ? ' min="0.01" step="any"' : type === 'datetime-local' ? ' step="any"' : '') + ' value="' + esc(value) + '"></td>';
     }).join('') + '<td><button class="btn ghost small" data-cfg-delete="' + key + '">删除</button></td></tr>';
   }
   function table(key, label, rows) {
@@ -54,14 +60,15 @@
       jsonBox('source', 'Sheet 设置', {sheetMap:c.dataSource.sheetMap, headerRow:c.dataSource.headerRow}) + jsonBox('fields', '字段映射', c.fieldMap) +
       '<p class="config-hint">同一 TYPE 可有多台设备，EQPID 必须唯一。Platform 可用分号填写多个 TYPE，匹配时忽略大小写、空白和全半角格式差异；产品、工序、Recipe、针卡及机台编号的关联也忽略大小写；针卡列表支持逗号、分号和换行。</p>' +
       (d.meta.eqpSource === 'override' ? '<div class="note-card">当前使用手工机台配置，会覆盖 Excel 的 EQP 表。上传新文件后，请核对下方 TYPE；“恢复参考配置”会清空机台、PM、借机和在制的全部手工覆盖。</div>' : '') +
-      table('eqp', 'CP 机台', d.eqp) + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
+      '<p class="config-hint">PM 可以填写 EQPID 或 proberID。任一部件维护，整个组合设备停机；配对部件指定时间重叠时合并停机区间，保留两项维护记录；不同时段或未指定时间分别安排。编号有歧义时填写对象类型。</p>' +
+      table('eqp', '设备及 Prober 对应关系', d.eqp) + table('pm', 'PM 计划', d.pm) + table('borrow', '借机计划', borrow) +
       '<details class="config-details"><summary>在制填写说明</summary><p>在制不重排，保留当前占用。等待中 LotID 唯一时可只填 LotID，同名时还须填写行键（Lot 详情可查看）；重新导入后请核对行键；RUN 表示可用资格，资源日历保证任务互斥；非 RUN 不安排生产。</p></details>' + table('wip', '在制 Lot', d.wip || []) +
       '<div class="source-actions config-actions"><button class="btn primary" id="cfg-save">保存并排产</button><button class="btn ghost" id="cfg-excel">恢复参考配置</button></div>' +
       ((d.planIssues || []).length ? '<div class="note-card">当前计划冲突：' + d.planIssues.map(esc).join('<br>') + '</div>' : '') +
       '<div class="section-title"><h2>添加计划与推荐</h2><p>借机固定原机台推荐时间；PM 在维护窗口内推荐时间。</p></div>' +
       '<div class="config-grid"><label class="config-field">计划类别<select class="select" id="cfg-kind"><option value="borrow">借机</option><option value="pm">PM</option></select></label>' +
-      '<label class="config-field">所选机台<select class="select" id="cfg-machine">' + resources(true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
-      input('time', '借机日期', d.meta.month + '-01', 'date') + input('hours', '时长（小时）', 8, 'number') +
+      '<label class="config-field">所选机台<select class="select" id="cfg-machine">' + resources(true, true).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="config-field">PM 对象类型<select class="select" id="cfg-target-kind"><option value="">自动识别</option><option value="EQP">EQP</option><option value="PROBER">PROBER</option></select></label>' + input('time', '借机日期', d.meta.month + '-01', 'date') + input('hours', '时长（小时）', 8, 'number') +
       input('early', 'PM 最早日期', d.meta.month + '-01', 'date') + input('due', 'PM 期望日期', d.meta.month + '-03', 'date') + input('over', 'PM 最迟完成日期', d.meta.month + '-05', 'date') + '</div>' +
       '<div class="source-actions config-actions"><button class="btn ghost" id="cfg-recommend">试排并推荐</button><button class="btn primary" id="cfg-add">添加计划并保存</button></div><div id="cfg-result" class="note-card" role="status">推荐后点击添加保存。</div></div></div>';
   };
@@ -111,7 +118,7 @@
       if (hours<0.6 || hours>24) throw new Error('借机时数需为 0.6–24 小时');
       return {eqp:eqp, date:time.slice(0,10), hours:hours};
     }
-    return {eqp:eqp, early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};
+    return {eqp:eqp, targetKind:(A.$('#cfg-target-kind') || {}).value || '', early:A.$('#cfg-early').value, due:A.$('#cfg-due').value, over:A.$('#cfg-over').value, hours:hours};
   }
   function addedBorrow(result, count) { return result.borrows.find(function (b) { return b.id === 'BR-' + String(count).padStart(2, '0'); }); }
   function setBusy(value) {
@@ -165,7 +172,7 @@
           await save(cfg);
         } else if (kind === 'pm') {
           data.pm.push(proposal);
-          var result = await A.SCHED.run(data, A.state.options), pm = result.pmRecords[result.pmRecords.length - 1];
+          var result = await A.SCHED.run(data, A.state.options), pm = result.pmRecords.find(function(p){return (p.sourceIds || [p.id]).indexOf('PM-' + String(data.pm.length).padStart(2,'0')) >= 0;});
           output.textContent = '固定机台 ' + pm.eqp + '，推荐维护时间：' + A.fmtDateTime(pm.start) + ' → ' + A.fmtDateTime(pm.end) + '。点击“添加计划并保存”后生效。';
         } else {
           data.borrow.push(proposal);

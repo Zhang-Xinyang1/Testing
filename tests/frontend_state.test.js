@@ -141,3 +141,34 @@ test('an uploaded workbook survives view rerenders and failed saves until commit
   assert.equal(app.state.config.dataSource.path, 'uploads/new.xlsx');
   assert.doesNotMatch(app.configurationHTML(), /新文件已上传，等待保存/);
 });
+
+test('PM editor saves assembly pairing, object kind and exact start seconds', async () => {
+  const env=environment(),app=env.app,listeners={};
+  const nodes={
+    '#cfg-path':{value:'data.xlsx'},'#cfg-file-status':{textContent:'data.xlsx'},
+    '#cfg-result':{},'#cfg-source':{value:'{"sheetMap":{},"headerRow":1}'},
+    '#cfg-fields':{value:'{}'},'#cfg-month':{value:'2026-09'},
+    '#cfg-bake-machines':{value:'7'},'#cfg-bake-chambers':{value:'4'},
+    '#cfg-kind':{value:'pm'},'#cfg-machine':{value:'P1'}
+  };
+  app.$=selector=>nodes[selector];
+  app.state.config={dataSource:{path:'data.xlsx',sheetMap:{},headerRow:1},fieldMap:{}};
+  app.state.data={eqp:[{id:'M1',type:'A',proberId:'P1',status:'RUN'}],borrow:[],wip:[],meta:{month:'2026-09'},
+    pm:[{eqp:'P1',targetKind:'PROBER',early:'2026-09-01',due:'2026-09-01',over:'2026-09-01',hours:2,start:'2026-09-01T08:00:30.125+08:00'}]};
+  app.SCHED.parseDate=v=>Date.parse(/[Zz]|[+-]\d\d:\d\d$/.test(v)?v:v+'+08:00');
+  const row=(values)=>({fields:Object.entries(values).map(([field,value])=>({dataset:{field},value:String(value),type:field==='hours'?'number':field==='start'?'datetime-local':'text'}))});
+  const rows={eqp:[row(app.state.data.eqp[0])],pm:[row({...app.state.data.pm[0],start:'2026-09-01T08:00:30.125'})],borrow:[],wip:[]};
+  app.$$=(selector,parent)=>parent?parent.fields:(selector.match(/^#cfg-table-(\w+) tbody tr$/)?rows[selector.match(/^#cfg-table-(\w+)/)[1]]:[]);
+  env.context.document={addEventListener(type,callback){listeners[type]=callback;}};
+  let posted;
+  env.context.fetch=async(url,request)=>{posted=JSON.parse(request.body);return {ok:false,json:async()=>({error:'test preview rejection'})};};
+  vm.runInContext(env.read('configuration.js'),env.context);
+  const html=app.configurationHTML();
+  assert.match(html,/data-field="proberId"/);
+  assert.match(html,/data-field="targetKind"/);
+  assert.match(html,/value="2026-09-01T08:00:30.125"/);
+  await listeners.click({target:{id:'cfg-save',closest:()=>null}});
+  assert.equal(posted.scheduling.eqp[0].proberId,'P1');
+  assert.equal(posted.scheduling.pm[0].targetKind,'PROBER');
+  assert.equal(posted.scheduling.pm[0].start,'2026-09-01T08:00:30.125+08:00');
+});

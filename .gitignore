@@ -6,4 +6,5 @@ config/uploads/
 config/runs/
 .runtime/
 .artifacts/
+excel_audit_reports/
 ~$*
