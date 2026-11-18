@@ -275,7 +275,7 @@ a { color: var(--blue); text-decoration: none; }
 .mini-table tr:last-child td { border-bottom: 0; }
 .mini-table tr.clickable { cursor: pointer; }
 .mini-table tr.clickable:hover td { background: #fafcff; }
-.platform-badge { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 22px; border-radius: 6px; font-size: 10px; font-weight: 700; }
+.platform-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 22px; padding: 0 6px; border-radius: 6px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .pf-K1 { background: #e9f0ff; color: #2f5ccc; }
 .pf-K2 { background: #e5f8f5; color: #0b8d86; }
 .pf-K3 { background: #fff3e0; color: #b16f08; }

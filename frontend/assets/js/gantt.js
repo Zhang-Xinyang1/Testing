@@ -5,6 +5,160 @@
   var $ = A.$, num = A.num, esc = A.esc, fmtDate = A.fmtDate, fmtDateTime = A.fmtDateTime, pad2 = A.pad2;
   var DAY = A.DAY, HOUR = A.HOUR;
 
+  /* 左侧资源表：机台/腔体 + 四列统计（换线、末单完成、利用率、宕机时间）。 */
+  var RES_W = 84, LABEL_PAD = 12, LABEL_PAD_R = 10;
+  var STAT_COLS = [
+    { key: 'changes', label: '换线', hint: '次', w: 34 },
+    { key: 'last', label: '末单完成', hint: '时间', w: 64 },
+    { key: 'util', label: '利用率', hint: '占比', w: 46 },
+    { key: 'down', label: '宕机', hint: '小时', w: 46 }
+  ];
+  /* 宕机口径：PM 维护 + 故障停机（资源上的 down 区间）。
+     若现场只把故障算宕机、计划保养不计入，把这里改成 false 即可。 */
+  var PM_IS_DOWN = true;
+  /* 换线口径：相邻两单 Recipe 或针卡任一变化即计一次；两者同时变化仍只计一次。
+     时间轴上用红色竖线 + 顶部小三角标出每次换线的起点。 */
+  var LINE_CHANGE_COLOR = '#d92d20';
+
+  function labelWidth() {
+    return LABEL_PAD + RES_W + LABEL_PAD_R +
+      STAT_COLS.reduce(function (sum, col) { return sum + col.w; }, 0);
+  }
+
+  function mergeIntervals(list) {
+    var out = [];
+    list.filter(function (iv) { return iv && iv[1] > iv[0]; })
+      .sort(function (a, b) { return a[0] - b[0]; })
+      .forEach(function (iv) {
+        var last = out[out.length - 1];
+        if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+        else out.push([iv[0], iv[1]]);
+      });
+    return out;
+  }
+
+  function coveredMs(intervals, from, to) {
+    if (!isFinite(from) || !isFinite(to) || to <= from) return 0;
+    return mergeIntervals(intervals).reduce(function (sum, iv) {
+      return sum + Math.max(0, Math.min(iv[1], to) - Math.max(iv[0], from));
+    }, 0);
+  }
+
+  /* 单台资源（CP 机台或 BAKE 腔体）的四项统计。
+     利用率窗口 = [排产开始, 该资源最后一单完工]；
+     窗口内加工（含换线准备）、借机、在制占用算工作，PM/故障停机单独计宕机。 */
+  function resourceStats(res, result) {
+    result = result || A.state.result || {};
+    var from = result.start, monthEnd = result.monthEnd == null ? from : result.monthEnd;
+    var items = res.kind === 'cp' ? (res.tasks || []) : (res.batches || []);
+    var work = [], down = [], changes = 0, last = null, lineFlags = [];
+    var prevRecipe = res.initialRecipe;
+    var prevCard = res.kind === 'cp' ? res.initialCard : null;
+    items.forEach(function (item) {
+      var recipeChanged = prevRecipe != null && item.recipe != null && item.recipe !== prevRecipe;
+      var cardChanged = res.kind === 'cp' && prevCard != null && item.card != null && item.card !== prevCard;
+      if (recipeChanged || cardChanged) {
+        changes += 1;
+        lineFlags.push({
+          recipe: recipeChanged, card: cardChanged,
+          fromRecipe: prevRecipe, toRecipe: item.recipe,
+          fromCard: prevCard, toCard: item.card
+        });
+      } else {
+        lineFlags.push(null);
+      }
+      prevRecipe = item.recipe;
+      if (res.kind === 'cp') prevCard = item.card;
+      var begin = res.kind === 'cp' && item.blockStart != null ? item.blockStart : item.start;
+      work.push([begin, item.end]);
+      if (last == null || item.end > last) last = item.end;
+    });
+    (res.borrows || []).forEach(function (b) { work.push([b.start, b.end]); });
+    (res.wip || []).forEach(function (w) {
+      work.push([A.SCHED.parseDate(w.start), A.SCHED.parseDate(w.end)]);
+    });
+    if (PM_IS_DOWN) (res.pm || []).forEach(function (iv) { down.push([iv[0], iv[1]]); });
+    (res.down || []).forEach(function (iv) {
+      down.push(Array.isArray(iv) ? [iv[0], iv[1]] : [iv.start, iv.end]);
+    });
+    var stats = { changes: changes, lineFlags: lineFlags, last: last, windowMs: 0, workMs: 0,
+      downMs: 0, idleMs: 0, util: null };
+    if (res.available === false) {
+      var end = last == null ? monthEnd : last;
+      stats.windowMs = Math.max(0, end - from);
+      stats.downMs = stats.windowMs;
+      stats.util = stats.windowMs > 0 ? 0 : null;
+      return stats;
+    }
+    var limit = last == null ? monthEnd : last;
+    if (last != null) stats.windowMs = Math.max(0, last - from);
+    stats.workMs = coveredMs(work, from, limit);
+    stats.downMs = coveredMs(down, from, limit);
+    var occupied = coveredMs(work.concat(down), from, limit);
+    if (last != null) {
+      stats.idleMs = Math.max(0, stats.windowMs - occupied);
+      stats.util = stats.windowMs > 0 ? stats.workMs / stats.windowMs : null;
+    }
+    return stats;
+  }
+
+  function aggregateStats(rows) {
+    var out = null;
+    rows.forEach(function (row) {
+      var stat = row.stats;
+      if (!stat) return;
+      out = out || { changes: 0, last: null, windowMs: 0, workMs: 0,
+        downMs: 0, idleMs: 0, util: null };
+      out.changes += stat.changes || 0;
+      if (stat.last != null && (out.last == null || stat.last > out.last)) out.last = stat.last;
+      out.windowMs += stat.windowMs || 0;
+      out.workMs += stat.workMs || 0;
+      out.downMs += stat.downMs || 0;
+      out.idleMs += stat.idleMs || 0;
+    });
+    if (out) out.util = out.windowMs > 0 ? out.workMs / out.windowMs : null;
+    return out;
+  }
+
+  function statText(key, stats) {
+    if (!stats) return '—';
+    if (key === 'changes') return String(stats.changes || 0);
+    if (key === 'last') return stats.last == null ? '—' : fmtDateTime(stats.last);
+    if (key === 'util') return stats.util == null ? '—' : (stats.util * 100).toFixed(1) + '%';
+    if (key === 'down') return (stats.downMs || 0) > 0 ? (stats.downMs / HOUR).toFixed(1) + 'h' : '0h';
+    return '—';
+  }
+
+  function statColor(key, stats, muted) {
+    var down = stats ? (stats.downMs || 0) : 0;
+    if (muted) return '#7f8da4';
+    if (key === 'util' && stats && stats.util != null) {
+      if (stats.util >= 0.95) return '#b4453f';
+      if (stats.util >= 0.85) return '#b07b1e';
+    }
+    if (key === 'down' && down > 0) return '#6f52c9';
+    if (key === 'changes' && !(stats && stats.changes)) return '#b9c3d1';
+    if (key === 'down' && !down) return '#b9c3d1';
+    return '#3d4d66';
+  }
+
+  function hoursText(ms) {
+    if (ms == null || !isFinite(ms)) return '—';
+    return (ms / HOUR).toFixed(1) + ' h';
+  }
+
+  function drawStatCells(ctx, stats, baseline, muted) {
+    var x = LABEL_PAD + RES_W;
+    STAT_COLS.forEach(function (col) {
+      ctx.textAlign = 'right';
+      ctx.font = (muted ? '500 8px ' : '600 8.5px ') + '"PingFang SC", sans-serif';
+      ctx.fillStyle = statColor(col.key, stats, muted);
+      ctx.fillText(statText(col.key, stats), x + col.w - 8, baseline);
+      x += col.w;
+    });
+    ctx.textAlign = 'left';
+  }
+
   function renderGantt() {
     var r = A.state.result, g = A.state.gantt;
     var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
@@ -32,6 +186,8 @@
       '<div class="gantt-legend">' +
         '<span>CP 任务按机台组着色</span>' +
         '<span><i style="background:#f0b45a"></i>BAKE 批</span><span><i style="background:#c9b8f5"></i>PM 维护</span><span><i style="background:#f3a58a"></i>借机</span><span><i style="background:#65758b"></i>在制占用 / 不可用</span>' +
+        '<span><i style="background:#d92d20;width:2px;height:12px;border-radius:1px"></i>红色标记 = 换线（全月为顶部刻度）</span>' +
+        '<span style="flex-basis:100%;color:#94a1b4">左侧四列 · 换线 = 相邻两单 Recipe 或针卡变化次数（两者同时变只计 1 次，含首单；图中红色标记标出）· 末单完成 = 最后一单完工时间 · 利用率 = 完工窗口内非空闲非宕机占比 · 宕机 = PM 维护与故障停机</span>' +
         '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击详情</span>' +
       '</div>' +
       '<div class="gantt-scroll" id="gantt-scroll"><canvas id="gantt-canvas"></canvas></div>' +
@@ -66,15 +222,27 @@
       var types = g.platform === 'all' ? Array.from(new Set(r.machines.map(function(m){return m.type;}))).sort() : [g.platform];
       types.forEach(function (type) {
         var ms = r.machines.filter(function (m) { return m.type === type; });
-        rows.push({ kind: 'group', label: platformOfType(type) + ' · ' + type, sub: ms.length + ' 台' });
-        ms.forEach(function (m) { rows.push({ kind: 'machine', res: m, label: m.id, sub: 'CP' }); });
+        var group = { kind: 'group', label: platformOfType(type) + ' · ' + type, sub: ms.length + ' 台', children: [] };
+        rows.push(group);
+        ms.forEach(function (m) {
+          var row = { kind: 'machine', res: m, label: m.id, sub: 'CP', stats: resourceStats(m, r) };
+          group.children.push(row);
+          rows.push(row);
+        });
+        group.stats = aggregateStats(group.children);
       });
     }
     if (g.mode !== 'cp') {
       Array.from(new Set(r.chambers.map(function(c){return c.eqp;}))).forEach(function(eqp){
         var chambers=r.chambers.filter(function(c){return c.eqp===eqp;});
-        rows.push({kind:'group',label:eqp,sub:chambers.length+' 腔'});
-        chambers.forEach(function(c){rows.push({kind:'machine',res:c,label:c.id,sub:'BAKE'});});
+        var group = { kind: 'group', label: eqp, sub: chambers.length + ' 腔', children: [] };
+        rows.push(group);
+        chambers.forEach(function(c){
+          var row = {kind:'machine',res:c,label:c.id,sub:'BAKE',stats:resourceStats(c, r)};
+          group.children.push(row);
+          rows.push(row);
+        });
+        group.stats = aggregateStats(group.children);
       });
     }
     var y = 46;
@@ -100,7 +268,7 @@
     var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
     var start = ganttStart(r, g, rangeDays), end = start + rangeDays * DAY;
     var width = Math.max(scroll.clientWidth || 1000, 920);
-    var labelW = 170, axisH = 46, padR = 12;
+    var labelW = labelWidth(), axisH = 46, padR = 12;
     var height = axisH + rows.reduce(function (a, x) { return a + x.h; }, 0) + 10;
     var dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
@@ -133,8 +301,6 @@
         ctx.fillStyle = '#f6f9fd'; ctx.fillRect(0, row.y, width, row.h);
         ctx.fillStyle = '#2c3d58'; ctx.font = '700 10px "PingFang SC", sans-serif';
         ctx.fillText(row.label, 14, row.y + 16);
-        ctx.fillStyle = '#94a1b4'; ctx.font = '9px "PingFang SC", sans-serif';
-        ctx.textAlign = 'right'; ctx.fillText(row.sub, width - 12, row.y + 16); ctx.textAlign = 'left';
         ctx.strokeStyle = '#e4e9f1'; ctx.beginPath(); ctx.moveTo(0, row.y + row.h - .5); ctx.lineTo(width, row.y + row.h - .5); ctx.stroke();
       } else {
         alt++;
@@ -163,7 +329,7 @@
       }
       if (res.kind === 'cp') {
         res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
-        res.tasks.forEach(function (task) {
+        res.tasks.forEach(function (task, i) {
           if (task.end < start || task.start > end) return;
           visible++;
           var x1 = xOf(task.start), x2 = xOf(task.end);
@@ -175,6 +341,18 @@
           ctx.fillStyle = A.PLATFORM_COLORS[task.platform] || '#2f6bff';
           ctx.globalAlpha = .9; ctx.fillRect(x1, y0, w, y1 - y0); ctx.globalAlpha = 1;
           addRegion(regions[idx], x1, x1 + w, y0, y1, 'cp', task, res);
+          var lc = row.stats && row.stats.lineFlags && row.stats.lineFlags[i];
+          var lcMs = task.blockStart != null ? task.blockStart : task.start;
+          if (lc && lcMs >= start && lcMs <= end) {
+            var lx = xOf(lcMs);
+            drawLineChange(ctx, lx, y0, y1, rangeDays > 7);
+            addRegion(regions[idx], lx - 4, lx + 4, rangeDays > 7 ? y0 - 1 : y0, rangeDays > 7 ? y0 + 5 : y1, 'linechange', {
+              time: lcMs, recipe: lc.recipe, card: lc.card,
+              fromRecipe: lc.fromRecipe, toRecipe: lc.toRecipe,
+              fromCard: lc.fromCard, toCard: lc.toCard,
+              label: task.lotId + ' · ' + task.step
+            }, res);
+          }
         });
         res.borrows.forEach(function (b) {
           if (b.end < start || b.start > end) return;
@@ -185,7 +363,7 @@
         });
       } else {
         res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
-        res.batches.forEach(function (batch) {
+        res.batches.forEach(function (batch, i) {
           if (batch.end < start || batch.start > end) return;
           visible++;
           var bx1 = xOf(batch.start), bx2 = xOf(batch.end), bw = Math.max(1.6, bx2 - bx1);
@@ -197,6 +375,17 @@
             ctx.fillText(batch.lots.length + ' lots', bx1 + 4, y0 + 11);
           }
           addRegion(regions[idx], bx1, bx1 + bw, y0, y1, 'bake', batch, res);
+          var lc = row.stats && row.stats.lineFlags && row.stats.lineFlags[i];
+          if (lc && batch.start >= start && batch.start <= end) {
+            var lx = xOf(batch.start);
+            drawLineChange(ctx, lx, y0, y1, rangeDays > 7);
+            addRegion(regions[idx], lx - 4, lx + 4, rangeDays > 7 ? y0 - 1 : y0, rangeDays > 7 ? y0 + 5 : y1, 'linechange', {
+              time: batch.start, recipe: lc.recipe, card: lc.card,
+              fromRecipe: lc.fromRecipe, toRecipe: lc.toRecipe,
+              fromCard: lc.fromCard, toCard: lc.toCard,
+              label: batch.id
+            }, res);
+          }
         });
       }
     });
@@ -208,19 +397,45 @@ function drawGanttChrome(ctx, rows, regions, visible, width, height, labelW, axi
     ctx.strokeStyle = '#e4e9f1'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(labelW - .5, 0); ctx.lineTo(labelW - .5, height); ctx.stroke();
     ctx.fillStyle = '#6b7a91'; ctx.font = '600 9px "PingFang SC", sans-serif';
-    ctx.fillText('资源 / 时间', 14, 27);
+    ctx.fillText('资源 / 时间', 14, 20);
+    ctx.fillStyle = '#aab5c5'; ctx.font = '8px "PingFang SC", sans-serif';
+    ctx.fillText('机台 · 腔体', 14, 34);
+    var colX = LABEL_PAD + RES_W;
+    STAT_COLS.forEach(function (col) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#6b7a91'; ctx.font = '600 9px "PingFang SC", sans-serif';
+      ctx.fillText(col.label, colX + col.w - 8, 20);
+      ctx.fillStyle = '#aab5c5'; ctx.font = '8px "PingFang SC", sans-serif';
+      ctx.fillText(col.hint, colX + col.w - 8, 34);
+      ctx.textAlign = 'left';
+      colX += col.w;
+    });
+    ctx.strokeStyle = '#eef2f7'; ctx.lineWidth = 1;
+    colX = LABEL_PAD + RES_W;
+    STAT_COLS.slice(0, -1).forEach(function (col) {
+      colX += col.w;
+      var sx = Math.round(colX) + .5;
+      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, height); ctx.stroke();
+    });
     rows.forEach(function (row) {
       if (row.kind === 'group') {
         ctx.fillStyle = '#f6f9fd'; ctx.fillRect(0, row.y, labelW - 1, row.h);
         ctx.fillStyle = '#2c3d58'; ctx.font = '700 9.5px "PingFang SC", sans-serif';
-        ctx.fillText(row.label, 14, row.y + 16);
+        ctx.fillText(row.label, LABEL_PAD + 2, row.y + 16);
+        var nameW = ctx.measureText(row.label).width;
+        ctx.fillStyle = '#94a1b4'; ctx.font = '8px "PingFang SC", sans-serif';
+        ctx.fillText(row.sub, LABEL_PAD + 8 + nameW, row.y + 16);
+        drawStatCells(ctx, row.stats, row.y + 16, true);
       } else {
         ctx.fillStyle = '#16233a'; ctx.font = '500 9.5px "PingFang SC", sans-serif';
-        ctx.fillText(row.label, 14, row.y + 16);
-        ctx.fillStyle = '#a6b2c4'; ctx.font = '8px "PingFang SC", sans-serif';
-        ctx.textAlign = 'right'; ctx.fillText(row.sub, labelW - 10, row.y + 16); ctx.textAlign = 'left';
+        ctx.fillText(row.label, LABEL_PAD + 2, row.y + 16);
+        if (row.res.kind === 'cp') {
+          ctx.fillStyle = '#a6b2c4'; ctx.font = '8px "PingFang SC", sans-serif';
+          ctx.textAlign = 'right'; ctx.fillText(row.sub, LABEL_PAD + RES_W - 8, row.y + 16); ctx.textAlign = 'left';
+        }
         var dotColor = row.res.kind === 'cp' ? A.PLATFORM_COLORS[platformOfType(row.res.type)] : '#e89b1c';
         ctx.fillStyle = dotColor; ctx.beginPath(); ctx.arc(9, row.y + 13, 2, 0, Math.PI * 2); ctx.fill();
+        drawStatCells(ctx, row.stats, row.y + 16);
       }
     });
 
@@ -270,6 +485,29 @@ function drawGanttChrome(ctx, rows, regions, visible, width, height, labelW, axi
     ctx.restore();
   }
 
+  /* 换线标记：短周期用红色竖线贯穿资源行 + 顶部小三角；全月任务过密时
+     只在行顶部画红色刻度，避免红色盖住任务条。 */
+  function drawLineChange(ctx, x, y0, y1, compact) {
+    var px = Math.round(x) + .5;
+    ctx.save();
+    ctx.strokeStyle = LINE_CHANGE_COLOR;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, y0 - 1);
+    ctx.lineTo(px, compact ? y0 + 5 : y1 + 1);
+    ctx.stroke();
+    if (!compact) {
+      ctx.fillStyle = LINE_CHANGE_COLOR;
+      ctx.beginPath();
+      ctx.moveTo(px - 3.5, y0 - 1);
+      ctx.lineTo(px + 3.5, y0 - 1);
+      ctx.lineTo(px, y0 + 3.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function addRegion(arr, x1, x2, y1, y2, type, data, res) {
     arr.push({ x1: x1, x2: x2, y1: y1, y2: y2, type: type, data: data, res: res });
   }
@@ -280,13 +518,20 @@ function ganttHit(e) {
     if (!geom) return null;
     var rect = canvas.getBoundingClientRect();
     var x = e.clientX - rect.left, y = e.clientY - rect.top;
-    if (x < geom.labelW || y < geom.axisH) return null;
+    if (y < geom.axisH) return null;
     var rowIdx = -1;
     for (var i = 0; i < geom.rows.length; i++) {
       var row = geom.rows[i];
       if (row.kind === 'machine' && y >= row.y && y < row.y + row.h) { rowIdx = i; break; }
     }
     if (rowIdx < 0) return null;
+    if (x < geom.labelW) {
+      var labelRow = geom.rows[rowIdx];
+      return {
+        type: 'resource', res: labelRow.res, stats: labelRow.stats,
+        x1: 0, x2: geom.labelW, y1: labelRow.y, y2: labelRow.y + labelRow.h
+      };
+    }
     var arr = A.state.ganttRegions[rowIdx] || [];
     for (var j = arr.length - 1; j >= 0; j--) {
       var h = arr[j];
@@ -299,6 +544,30 @@ function ganttHit(e) {
     var hit = ganttHit(e);
     if (!hit) { hideTip(); return; }
     var html = '';
+    if (hit.type === 'resource') {
+      var s = hit.stats || {};
+      html = '<div class="tip-title">' + esc(hit.res.id) + ' · 资源统计</div>' +
+        '<div class="tip-row"><span class="tip-muted">换线（Recipe / 换卡）</span><b>' + (s.changes || 0) + ' 次</b></div>' +
+        (hit.res.kind === 'cp' ? '<div class="tip-row"><span class="tip-muted">其中换卡（Setup）</span><span>' + (hit.res.setupCount || 0) + ' 次</span></div>' : '') +
+        '<div class="tip-row"><span class="tip-muted">末单完成</span><span>' + (s.last == null ? '—' : fmtDateTime(s.last)) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">完工窗口</span><span>' + hoursText(s.windowMs) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">工作</span><span>' + hoursText(s.workMs) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">空闲</span><span>' + hoursText(s.idleMs) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">宕机</span><span>' + hoursText(s.downMs) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-muted">利用率</span><b>' + (s.util == null ? '—' : (s.util * 100).toFixed(1) + '%') + '</b></div>';
+      showTip(html, e); return;
+    }
+    if (hit.type === 'linechange') {
+      var lc = hit.data;
+      var reason = lc.recipe && lc.card ? 'Recipe + 针卡' : (lc.recipe ? 'Recipe' : '针卡');
+      html = '<div class="tip-title">换线 · ' + esc(hit.res.id) + '</div>' +
+        '<div class="tip-row"><span class="tip-muted">触发</span><b>' + reason + '</b></div>' +
+        (lc.recipe ? '<div class="tip-row"><span class="tip-muted">Recipe</span><span>' + esc(lc.fromRecipe) + ' → ' + esc(lc.toRecipe) + '</span></div>' : '') +
+        (lc.card ? '<div class="tip-row"><span class="tip-muted">针卡</span><span class="mono">' + esc(lc.fromCard) + ' → ' + esc(lc.toCard) + '</span></div>' : '') +
+        (lc.label ? '<div class="tip-row"><span class="tip-muted">下一单</span><span>' + esc(lc.label) + '</span></div>' : '') +
+        '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(lc.time) + '</span></div>';
+      showTip(html, e); return;
+    }
     if (hit.type === 'cp') {
       var t = hit.data;
       html = '<div class="tip-title">' + esc(t.lotId) + ' · ' + esc(t.step) + '</div>' +
@@ -370,4 +639,6 @@ function ganttHit(e) {
   A.onGanttMove = onGanttMove;
   A.hideTip = hideTip;
   A.locateLot = locateLot;
+  A.resourceStats = resourceStats;
+  A.ganttLabelWidth = labelWidth;
 })();
