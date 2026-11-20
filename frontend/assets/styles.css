@@ -362,6 +362,46 @@ a { color: var(--blue); text-decoration: none; }
 .gantt-tip .tip-title { font-size: 11px; font-weight: 700; margin-bottom: 4px; }
 .gantt-footer { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line-2); font-size: 10px; color: var(--muted); flex-wrap: wrap; }
 
+/* ---------- PPN detail: search, lot/step table ---------- */
+.ppn-search { width: 238px; }
+.ppn-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden;
+}
+.ppn-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding: 15px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap;
+}
+.ppn-kicker { font-size: 10px; font-weight: 700; letter-spacing: .9px; color: var(--teal); text-transform: uppercase; }
+.ppn-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.ppn-title { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: -.3px; color: var(--ink); }
+.ppn-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 7px; font-size: 12px; color: var(--muted); }
+.ppn-meta b { color: var(--ink-2); font-weight: 700; }
+.ppn-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ppn-hint { font-size: 11px; color: var(--muted-2); }
+.ppn-table-scroll { max-height: 378px; overflow: auto; }
+.data-table.ppn-table { min-width: 900px; }
+.ppn-table thead th { z-index: 6; }
+.ppn-table tbody tr.lot-alt td { background: #fbfcfe; }
+.ppn-table tbody td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ppn-table tbody td.mach { white-space: nowrap; }
+.ppn-table tbody td.mach .mono { color: #315468; }
+.ppn-table tbody td.minutes { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; color: #0f7a6b; }
+.ppn-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 18px; border-top: 1px solid var(--line-2); background: #fbfcfc;
+  font-size: 11px; color: var(--muted); flex-wrap: wrap;
+}
+.ppn-empty { padding: 38px 20px; text-align: center; color: var(--muted); }
+.ppn-focus {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px;
+  border-radius: 999px; background: var(--teal-soft); color: var(--teal);
+  border: 1px solid #c9efeb; font-weight: 700;
+}
+@media (max-width: 820px) {
+  .ppn-search { width: 100%; }
+}
+
 /* ---------- tabs / resource ---------- */
 .tabs { display: inline-flex; gap: 3px; background: #f1f4f9; padding: 3px; border-radius: 9px; }
 .tabs button { border: 0; background: transparent; height: 28px; padding: 0 13px; border-radius: 7px; font-size: 10.5px; font-weight: 600; color: var(--muted); }

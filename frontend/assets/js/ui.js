@@ -111,6 +111,16 @@
       else if (hit && hit.type === 'wip') A.toast('在制 Lot ' + hit.data.lotId + ' · 预计释放 ' + fmtDateTime(A.SCHED.parseDate(hit.data.end)));
       return;
     }
+    var ppnSearch = e.target.closest('[data-gantt-ppn-search]');
+    if (ppnSearch) {
+      var ppnInput = $('#gantt-ppn-q');
+      A.searchPpn(ppnInput ? ppnInput.value : '');
+      return;
+    }
+    var ppnClear = e.target.closest('[data-gantt-ppn-clear]');
+    if (ppnClear) { A.clearPpn(); return; }
+    var lotRow = e.target.closest('[data-lot-key]');
+    if (lotRow) { openLotDrawer(lotRow.getAttribute('data-lot-key')); return; }
     var product = e.target.closest('[data-product]');
     if (product) { openProductDrawer(product.getAttribute('data-product')); return; }
     var gmode = e.target.closest('[data-gantt-mode] button');
@@ -155,7 +165,7 @@
       var n = $('#inputs-q');
       if (n) { n.focus(); n.setSelectionRange(v.length, v.length); }
     }
-    if (e.target.id === 'gantt-lot-q') A.state.gantt.q = e.target.value;
+    if (e.target.id === 'gantt-ppn-q') A.state.gantt.q = e.target.value;
   }
 
   function csvCell(v) {
@@ -207,7 +217,7 @@
   document.addEventListener('mouseleave', function () { A.hideTip(); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') { closeModal(); closeDrawer(); }
-    if (e.key === 'Enter' && e.target.id === 'gantt-lot-q') A.locateLot(e.target.value);
+    if (e.key === 'Enter' && e.target.id === 'gantt-ppn-q') A.searchPpn(e.target.value);
   });
   var resizeTimer = null;
   window.addEventListener('resize', function () {

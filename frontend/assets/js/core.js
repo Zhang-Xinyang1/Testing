@@ -29,7 +29,7 @@
     options: { strategy: 'attainment', borrowMode: 'reserve', bakeWindowHours: null, setupMinutes: 5, maxDelayHours: 0 },
     view: 'mps',
     mps: { q: '', platform: 'all' },
-    gantt: { mode: 'all', range: '1d', anchor: 0, platform: 'all', q: '' },
+    gantt: { mode: 'all', range: '1d', anchor: 0, platform: 'all', q: '', ppn: '' },
     inputs: { sheet: 'MPS', q: '' },
     ganttRegions: [], ganttRows: [], ganttGeom: null,
     draft: null

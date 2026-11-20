@@ -90,6 +90,64 @@
         { rect: axisRect, n: 2 }
       ]
     },
+    ppn_search: {
+      setup: async function () {
+        A.navigate('gantt');
+        await delay(300);
+        A.searchPpn('PPN01');
+        await delay(500);
+      },
+      marks: [
+        { sel: '#gantt-ppn-q', n: 1 },
+        { sel: '.ppn-card', n: 2 },
+        { sel: '.ppn-table thead', n: 3 },
+        { rect: firstTaskRect, n: 4 }
+      ]
+    },
+    ppn_ui_test: {
+      setup: async function () {
+        A.navigate('gantt');
+        await delay(250);
+        var input = document.querySelector('#gantt-ppn-q');
+        input.value = 'PPN02';
+        document.querySelector('[data-gantt-ppn-search]').click();
+        await delay(350);
+        var matched = document.querySelector('.ppn-title').textContent;
+        var rows = document.querySelectorAll('.ppn-table tbody tr').length;
+        var platform = A.state.gantt.platform;
+        document.querySelector('.ppn-table tbody tr').click();
+        await delay(250);
+        var drawer = document.querySelector('#drawer').classList.contains('open');
+        document.querySelector('.ppn-card [data-gantt-ppn-clear]').click();
+        await delay(250);
+        var cleared = !A.state.gantt.ppn && !document.querySelector('.ppn-card');
+        input = document.querySelector('#gantt-ppn-q');
+        input.value = 'PPN05-L0001';
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await delay(350);
+        document.title = 'TEST matched=' + matched + ' rows=' + rows + ' platform=' + platform +
+          ' drawer=' + drawer + ' cleared=' + cleared + ' lotEnter=' + A.state.gantt.ppn;
+      }
+    },
+    ppn_range_test: {
+      setup: async function () {
+        A.navigate('gantt');
+        await delay(250);
+        A.searchPpn('PPN01');
+        await delay(350);
+        document.querySelector('[data-gantt-range] button[data-range="7d"]').click();
+        await delay(350);
+        var range = A.state.gantt.range;
+        var tableRows = document.querySelectorAll('.ppn-table tbody tr').length;
+        document.querySelector('[data-gantt-mode] button[data-mode="cp"]').click();
+        await delay(350);
+        var mode = A.state.gantt.mode;
+        var machines = A.state.ganttGeom ? A.state.ganttGeom.rows.filter(function (r) { return r.kind === 'machine'; }).length : 0;
+        var canvas = !!document.querySelector('#gantt-canvas');
+        document.title = 'TEST range=' + range + ' tableRows=' + tableRows + ' mode=' + mode +
+          ' machines=' + machines + ' canvas=' + canvas + ' ppn=' + A.state.gantt.ppn;
+      }
+    },
     gantt_drawer: {
       setup: async function () {
         gantt('cp', '1d');

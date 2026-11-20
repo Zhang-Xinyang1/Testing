@@ -13,16 +13,26 @@
     { key: 'util', label: '利用率', hint: '占比', w: 46 },
     { key: 'down', label: '宕机', hint: '小时', w: 46 }
   ];
-  /* 宕机口径：PM 维护 + 故障停机（资源上的 down 区间）。
-     若现场只把故障算宕机、计划保养不计入，把这里改成 false 即可。 */
-  var PM_IS_DOWN = true;
+  /* 搜索单个 PPN 时，左侧改为该 PPN 在本资源的任务数、占机时长与首末单时间。 */
+  var PPN_STAT_COLS = [
+    { key: 'ops', label: '任务', hint: '项数', w: 34 },
+    { key: 'occupied', label: '占机', hint: '小时', w: 46 },
+    { key: 'first', label: '首单', hint: '开始', w: 64 },
+    { key: 'last', label: '末单', hint: '完成', w: 64 }
+  ];
+
+  function statCols() {
+    return A.state.gantt && A.state.gantt.ppn ? PPN_STAT_COLS : STAT_COLS;
+  }
+  /* 宕机口径：只取资源上的故障停机区间（scheduler 后续输出的 down）。
+     数据源目前没有停机字段，PM 维护单独展示、不计入宕机，因此当前宕机恒为 0。 */
   /* 换线口径：相邻两单 Recipe 或针卡任一变化即计一次；两者同时变化仍只计一次。
      时间轴上用红色竖线 + 顶部小三角标出每次换线的起点。 */
   var LINE_CHANGE_COLOR = '#d92d20';
 
   function labelWidth() {
     return LABEL_PAD + RES_W + LABEL_PAD_R +
-      STAT_COLS.reduce(function (sum, col) { return sum + col.w; }, 0);
+      statCols().reduce(function (sum, col) { return sum + col.w; }, 0);
   }
 
   function mergeIntervals(list) {
@@ -46,11 +56,19 @@
 
   /* 单台资源（CP 机台或 BAKE 腔体）的四项统计。
      利用率窗口 = [排产开始, 该资源最后一单完工]；
-     窗口内加工（含换线准备）、借机、在制占用算工作，PM/故障停机单独计宕机。 */
+     窗口内加工（含换线准备）、借机、在制占用算工作；宕机只取资源上的 down 区间，
+     数据源未提供停机字段时恒为 0（PM 维护不算宕机）。 */
   function resourceStats(res, result) {
     result = result || A.state.result || {};
+    var ppn = A.state.gantt && A.state.gantt.ppn;
     var from = result.start, monthEnd = result.monthEnd == null ? from : result.monthEnd;
     var items = res.kind === 'cp' ? (res.tasks || []) : (res.batches || []);
+    if (ppn) {
+      items = items.filter(function (item) {
+        return res.kind === 'cp' ? item.prod === ppn :
+          (item.lots || []).some(function (lot) { return lot.prod === ppn; });
+      });
+    }
     var work = [], down = [], changes = 0, last = null, lineFlags = [];
     var prevRecipe = res.initialRecipe;
     var prevCard = res.kind === 'cp' ? res.initialCard : null;
@@ -73,20 +91,33 @@
       work.push([begin, item.end]);
       if (last == null || item.end > last) last = item.end;
     });
+    var ppnOps = 0, ppnOccupiedMs = 0, ppnFirst = null;
+    if (ppn) {
+      items.forEach(function (item) {
+        ppnOps += 1;
+        var begin = res.kind === 'cp' && item.blockStart != null ? item.blockStart : item.start;
+        var finish = res.kind === 'cp' ? item.end : (item.resourceEnd != null ? item.resourceEnd : item.end);
+        ppnOccupiedMs += Math.max(0, finish - begin);
+        if (ppnFirst == null || begin < ppnFirst) ppnFirst = begin;
+      });
+    }
     (res.borrows || []).forEach(function (b) { work.push([b.start, b.end]); });
     (res.wip || []).forEach(function (w) {
       work.push([A.SCHED.parseDate(w.start), A.SCHED.parseDate(w.end)]);
     });
-    if (PM_IS_DOWN) (res.pm || []).forEach(function (iv) { down.push([iv[0], iv[1]]); });
+    /* 宕机只取资源上的 down 区间（后续数据源提供的故障停机字段）。
+       当前数据无该字段，down 为空，宕机统计恒为 0；PM 维护不计入。 */
     (res.down || []).forEach(function (iv) {
       down.push(Array.isArray(iv) ? [iv[0], iv[1]] : [iv.start, iv.end]);
     });
     var stats = { changes: changes, lineFlags: lineFlags, last: last, windowMs: 0, workMs: 0,
-      downMs: 0, idleMs: 0, util: null };
+      downMs: 0, idleMs: 0, util: null,
+      ops: ppnOps, occupiedMs: ppnOccupiedMs, first: ppnFirst };
     if (res.available === false) {
       var end = last == null ? monthEnd : last;
       stats.windowMs = Math.max(0, end - from);
-      stats.downMs = stats.windowMs;
+      stats.downMs = 0;
+      stats.idleMs = stats.windowMs;
       stats.util = stats.windowMs > 0 ? 0 : null;
       return stats;
     }
@@ -108,8 +139,11 @@
       var stat = row.stats;
       if (!stat) return;
       out = out || { changes: 0, last: null, windowMs: 0, workMs: 0,
-        downMs: 0, idleMs: 0, util: null };
+        downMs: 0, idleMs: 0, util: null, ops: 0, occupiedMs: 0, first: null };
       out.changes += stat.changes || 0;
+      out.ops += stat.ops || 0;
+      out.occupiedMs += stat.occupiedMs || 0;
+      if (stat.first != null && (out.first == null || stat.first < out.first)) out.first = stat.first;
       if (stat.last != null && (out.last == null || stat.last > out.last)) out.last = stat.last;
       out.windowMs += stat.windowMs || 0;
       out.workMs += stat.workMs || 0;
@@ -123,6 +157,9 @@
   function statText(key, stats) {
     if (!stats) return '—';
     if (key === 'changes') return String(stats.changes || 0);
+    if (key === 'ops') return String(stats.ops || 0);
+    if (key === 'occupied') return (stats.occupiedMs || 0) > 0 ? (stats.occupiedMs / HOUR).toFixed(1) + 'h' : '0h';
+    if (key === 'first') return stats.first == null ? '—' : fmtDateTime(stats.first);
     if (key === 'last') return stats.last == null ? '—' : fmtDateTime(stats.last);
     if (key === 'util') return stats.util == null ? '—' : (stats.util * 100).toFixed(1) + '%';
     if (key === 'down') return (stats.downMs || 0) > 0 ? (stats.downMs / HOUR).toFixed(1) + 'h' : '0h';
@@ -138,6 +175,8 @@
     }
     if (key === 'down' && down > 0) return '#6f52c9';
     if (key === 'changes' && !(stats && stats.changes)) return '#b9c3d1';
+    if (key === 'ops' && !(stats && stats.ops)) return '#b9c3d1';
+    if (key === 'occupied' && stats && stats.occupiedMs) return '#0f7a6b';
     if (key === 'down' && !down) return '#b9c3d1';
     return '#3d4d66';
   }
@@ -149,7 +188,7 @@
 
   function drawStatCells(ctx, stats, baseline, muted) {
     var x = LABEL_PAD + RES_W;
-    STAT_COLS.forEach(function (col) {
+    statCols().forEach(function (col) {
       ctx.textAlign = 'right';
       ctx.font = (muted ? '500 8px ' : '600 8.5px ') + '"PingFang SC", sans-serif';
       ctx.fillStyle = statColor(col.key, stats, muted);
@@ -159,16 +198,157 @@
     ctx.textAlign = 'left';
   }
 
+  /* ---------- PPN detail: search box, lot/step table, PPN-only gantt ---------- */
+
+  function ppnOptions() {
+    var r = A.state.result, seen = {}, order = [];
+    (r.lots || []).forEach(function (lot) {
+      if (!seen[lot.prod]) {
+        seen[lot.prod] = { lots: 0, tasks: 0 };
+        order.push(lot.prod);
+      }
+      seen[lot.prod].lots += 1;
+      seen[lot.prod].tasks += (lot.routeTasks || []).length;
+    });
+    return order.sort().map(function (ppn) {
+      var info = seen[ppn];
+      return '<option value="' + esc(ppn) + '">' + esc(ppn) + ' · ' + info.lots + ' lots / ' + info.tasks + ' 工序</option>';
+    }).join('');
+  }
+
+  /* 汇总一个 PPN 的全部 Lot / 工序，供表格与甘特图共用。
+     占机口径：CP = 换卡准备开始 → 加工结束；BAKE = 整批占腔（含升降温）；
+     QTIME 不占机台，占机工时为 0。BAKE 同一批次多 Lot 共享腔体，合计时按批次去重。 */
+  function ppnSummary(ppn) {
+    var r = A.state.result, lots = [], rows = [], platforms = {}, batchIndex = {};
+    var cpMin = 0, bakeMin = 0, bakeSeen = {}, first = null, last = null;
+    (r.batches || []).forEach(function (batch) { batchIndex[batch.id] = batch; });
+    (r.lots || []).forEach(function (lot) {
+      if (lot.prod !== ppn) return;
+      lots.push(lot);
+      platforms[lot.platform] = true;
+      (lot.routeTasks || []).forEach(function (task) {
+        var chamber = task.chamber || '';
+        var machine = task.machine || chamber || '';
+        var begin = task.blockStart != null ? task.blockStart : task.start;
+        var finish = task.resourceEnd != null ? task.resourceEnd : task.end;
+        var minutes = machine ? Math.max(0, Math.round((finish - begin) / 60000)) : 0;
+        rows.push({
+          lot: lot, task: task, machine: machine, chamber: chamber,
+          begin: begin, end: finish, minutes: minutes,
+          batch: task.batchId ? batchIndex[task.batchId] : null
+        });
+        if (chamber) {
+          var batchKey = task.batchId || (chamber + '|' + begin);
+          if (!bakeSeen[batchKey]) { bakeSeen[batchKey] = true; bakeMin += minutes; }
+        } else if (task.machine) {
+          cpMin += minutes;
+        }
+      });
+    });
+    rows.sort(function (a, b) {
+      var byLot = a.lot.id.localeCompare(b.lot.id, 'en', { numeric: true });
+      return byLot || (a.begin - b.begin);
+    });
+    rows.forEach(function (row) {
+      if (first == null || row.begin < first) first = row.begin;
+      if (last == null || row.end > last) last = row.end;
+    });
+    return {
+      ppn: ppn, lots: lots, rows: rows, platforms: Object.keys(platforms).sort(),
+      totalMin: cpMin + bakeMin, cpMin: cpMin, bakeMin: bakeMin, first: first, last: last
+    };
+  }
+
+  function ppnTableHTML(summary) {
+    if (!summary.rows.length) {
+      return '<div class="ppn-empty">该 PPN 在本次排产中没有已排工序，可能缺少可用资源或尚未排产。</div>';
+    }
+    var lastLot = null, stripe = 0;
+    var body = summary.rows.map(function (row) {
+      if (row.lot.id !== lastLot) { lastLot = row.lot.id; stripe += 1; }
+      var stepSub = row.task.recipe ? esc(row.task.recipe) : '';
+      if (row.task.setup) stepSub += (stepSub ? ' · ' : '') + '换卡 ' + Math.round(row.task.setup / 60000) + ' min';
+      var machSub = '';
+      if (row.chamber) {
+        machSub = '批次 ' + esc(row.batch ? row.batch.id : '—') +
+          (row.batch ? ' · ' + row.batch.lots.length + ' lots 共享' : '');
+      } else if (!row.machine) {
+        machSub = '不占机台';
+      }
+      var machineCell = row.machine ? '<span class="mono">' + esc(row.machine) + '</span>' : '<span class="muted">—</span>';
+      if (machSub) machineCell += '<div class="sub">' + machSub + '</div>';
+      return '<tr class="clickable' + (stripe % 2 === 0 ? ' lot-alt' : '') + '" data-lot-key="' + esc(row.lot.key) + '">' +
+        '<td><div class="id">' + esc(row.lot.id) + '</div><div class="sub">' + row.lot.wafer + ' wafer · ' + esc(row.lot.platform) + '</div></td>' +
+        '<td><div class="strong">' + esc(row.task.step) + '</div>' + (stepSub ? '<div class="sub">' + stepSub + '</div>' : '') + '</td>' +
+        '<td class="mach">' + machineCell + '</td>' +
+        '<td class="when">' + fmtDateTime(row.begin) + '</td>' +
+        '<td class="when">' + fmtDateTime(row.end) + '</td>' +
+        '<td class="minutes">' + num(row.minutes) + '</td>' +
+        '</tr>';
+    }).join('');
+    return '<div class="table-scroll ppn-table-scroll"><table class="data-table compact ppn-table"><thead><tr>' +
+      '<th>Lot 名称</th><th>Step</th><th>机台</th><th>开始时间</th><th>结束时间</th><th class="right">占机工时（min）</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>';
+  }
+
+  function ppnCardHTML(summary) {
+    var platforms = summary.platforms.map(function (p) {
+      return '<span class="pill teal">' + esc(p) + '</span>';
+    }).join('');
+    var span = summary.first == null ? '—' : (fmtDateTime(summary.first) + ' → ' + fmtDateTime(summary.last));
+    return '<div class="ppn-card">' +
+      '<div class="ppn-head">' +
+        '<div class="ppn-head-main">' +
+          '<div class="ppn-kicker">PPN 详情</div>' +
+          '<div class="ppn-title-row"><h3 class="ppn-title">' + esc(summary.ppn) + '</h3>' + platforms +
+            '<span class="pill blue">' + summary.lots.length + ' lots</span>' +
+            '<span class="pill">' + summary.rows.length + ' 道工序</span></div>' +
+          '<div class="ppn-meta"><span>占机合计 <b>' + num(summary.totalMin) + ' min</b></span>' +
+            '<span>' + esc(span) + '</span></div>' +
+        '</div>' +
+        '<div class="ppn-actions">' +
+          '<span class="ppn-hint">点击任意行查看 Lot 详情</span>' +
+          '<button class="btn ghost small" type="button" data-gantt-ppn-clear>清除 PPN</button>' +
+        '</div>' +
+      '</div>' +
+      ppnTableHTML(summary) +
+      '<div class="ppn-foot"><span>共 ' + summary.rows.length + ' 行 · 按 Lot / Step 排序</span>' +
+        '<span>合计占机 ' + num(summary.totalMin) + ' min（CP 含换卡，BAKE 同批去重）</span></div>' +
+    '</div>';
+  }
+
   function renderGantt() {
     var r = A.state.result, g = A.state.gantt;
     var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
     var start = ganttStart(r, g, rangeDays);
+    var ppn = g.ppn || '';
+    var summary = ppn ? ppnSummary(ppn) : null;
+    if (ppn && (!summary || !summary.lots.length)) {
+      g.ppn = ''; g.q = ''; ppn = ''; summary = null;
+    }
     var platformOpts = '<option value="all">全部 Platform</option>' +
       Object.keys(A.state.data.platformType).sort().map(function (p) {
         return '<option value="' + p + '"' + (g.platform === p ? ' selected' : '') + '>' + p + ' · ' + A.state.data.platformType[p] + '</option>';
       }).join('');
+    var legend = ppn ?
+      '<span class="ppn-focus">仅显示 ' + esc(ppn) + '</span>' +
+      '<span>CP 任务按机台组着色</span>' +
+      '<span><i style="background:#f0b45a"></i>BAKE 批</span>' +
+      '<span style="flex-basis:100%;color:#94a1b4">左侧四列 · 任务 = 本 PPN 在该资源上的工序 / 批次数量 · 占机 = 本 PPN 占用该资源的工时（CP 含换卡，BAKE 按整批腔体占用）· 首单 / 末单 = 本 PPN 在该资源的最早开始与最晚完成</span>' +
+      '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击任务查看 Lot 详情</span>' :
+      '<span>CP 任务按机台组着色</span>' +
+      '<span><i style="background:#f0b45a"></i>BAKE 批</span><span><i style="background:#c9b8f5"></i>PM 维护</span><span><i style="background:#f3a58a"></i>借机</span><span><i style="background:#65758b"></i>在制占用 / 不可用</span>' +
+      '<span><i style="background:#d92d20;width:2px;height:12px;border-radius:1px"></i>红色标记 = 换线（全月为顶部刻度）</span>' +
+      '<span style="flex-basis:100%;color:#94a1b4">左侧四列 · 换线 = 相邻两单 Recipe 或针卡变化次数（两者同时变只计 1 次，含首单；图中红色标记标出）· 末单完成 = 最后一单完工时间 · 利用率 = 完工窗口内非空闲非宕机占比 · 宕机 = 故障停机（PM 维护单独展示、不计入；当前数据无停机字段，恒为 0）</span>' +
+      '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击详情</span>';
     var html = '<div class="toolbar">' +
-      '<span class="label">资源</span><div class="seg" data-gantt-mode>' +
+      '<span class="label">PPN</span>' +
+      '<input class="input search ppn-search" id="gantt-ppn-q" list="gantt-ppn-list" placeholder="搜索 PPN，如 PPN01" value="' + esc(g.q) + '" autocomplete="off">' +
+      '<datalist id="gantt-ppn-list">' + ppnOptions() + '</datalist>' +
+      '<button class="btn primary small" type="button" data-gantt-ppn-search>查询</button>' +
+      (ppn ? '<button class="btn ghost small" type="button" data-gantt-ppn-clear>清除</button>' : '') +
+      '<span class="label" style="margin-left:8px">资源</span><div class="seg" data-gantt-mode>' +
         '<button data-mode="cp" class="' + (g.mode === 'cp' ? 'active' : '') + '">CP 机台</button>' +
         '<button data-mode="bake" class="' + (g.mode === 'bake' ? 'active' : '') + '">BAKE 腔体</button>' +
         '<button data-mode="all" class="' + (g.mode === 'all' ? 'active' : '') + '">全部</button></div>' +
@@ -178,23 +358,24 @@
         }).join('') + '</div>' +
       '<div class="date-nav"><button data-gantt-nav="-1">‹</button><span class="date-label">' + ganttRangeLabel(start, rangeDays) + '</span><button data-gantt-nav="1">›</button></div>' +
       (g.mode !== 'bake' ? '<select class="select" id="gantt-platform">' + platformOpts + '</select>' : '') +
-      '<input class="input search" id="gantt-lot-q" placeholder="定位 Lot，如 PPN01-L0001" value="' + esc(g.q) + '">' +
       '<button class="btn ghost small" data-gantt-month>回到月初</button>' +
-      '<span class="filter-count">' + num(r.machines.length) + ' 台 CP · ' + r.chambers.length + ' 个 BAKE 腔体</span>' +
+      '<span class="filter-count">' + (summary ?
+        esc(ppn) + ' · ' + summary.lots.length + ' lots · ' + summary.rows.length + ' 道工序' :
+        num(r.machines.length) + ' 台 CP · ' + r.chambers.length + ' 个 BAKE 腔体') + '</span>' +
     '</div>' +
+    (summary ? ppnCardHTML(summary) : '') +
     '<div class="gantt-card">' +
-      '<div class="gantt-legend">' +
-        '<span>CP 任务按机台组着色</span>' +
-        '<span><i style="background:#f0b45a"></i>BAKE 批</span><span><i style="background:#c9b8f5"></i>PM 维护</span><span><i style="background:#f3a58a"></i>借机</span><span><i style="background:#65758b"></i>在制占用 / 不可用</span>' +
-        '<span><i style="background:#d92d20;width:2px;height:12px;border-radius:1px"></i>红色标记 = 换线（全月为顶部刻度）</span>' +
-        '<span style="flex-basis:100%;color:#94a1b4">左侧四列 · 换线 = 相邻两单 Recipe 或针卡变化次数（两者同时变只计 1 次，含首单；图中红色标记标出）· 末单完成 = 最后一单完工时间 · 利用率 = 完工窗口内非空闲非宕机占比 · 宕机 = PM 维护与故障停机</span>' +
-        '<span style="margin-left:auto;color:#94a1b4">悬停查看 · 点击详情</span>' +
-      '</div>' +
-      '<div class="gantt-scroll" id="gantt-scroll"><canvas id="gantt-canvas"></canvas></div>' +
-      '<div class="gantt-footer"><span>北京时间 · ' + ganttRangeLabel(start, rangeDays) + '</span><span id="gantt-footer-stat">—</span></div>' +
+      '<div class="gantt-legend">' + legend + '</div>' +
+      (summary && !summary.rows.length ?
+        '<div class="gantt-empty">PPN ' + esc(ppn) + ' 在本次排产中没有已排工序，可能缺少可用资源或尚未排产。</div>' :
+        '<div class="gantt-scroll" id="gantt-scroll"><canvas id="gantt-canvas"></canvas></div>') +
+      '<div class="gantt-footer"><span>北京时间 · ' + ganttRangeLabel(start, rangeDays) + '</span><span id="gantt-footer-stat">' +
+        (summary && !summary.rows.length ? '无已排任务' : '—') + '</span></div>' +
     '</div>' +
     '<div class="gantt-tip" id="gantt-tip"></div>';
     $('#view-gantt').innerHTML = html;
+    var sub = $('#page-sub');
+    if (sub) sub.textContent = ppn ? ('PPN ' + ppn + ' · 仅显示该 PPN 的机台与腔体甘特') : '机台与腔体时间轴';
     drawGantt();
   }
 
@@ -217,11 +398,17 @@
 
   function buildGanttRows() {
     var r = A.state.result, g = A.state.gantt;
+    var ppn = g.ppn || '';
     var rows = [];
     if (g.mode !== 'bake') {
       var types = g.platform === 'all' ? Array.from(new Set(r.machines.map(function(m){return m.type;}))).sort() : [g.platform];
       types.forEach(function (type) {
-        var ms = r.machines.filter(function (m) { return m.type === type; });
+        var ms = r.machines.filter(function (m) {
+          if (m.type !== type) return false;
+          if (!ppn) return true;
+          return (m.tasks || []).some(function (t) { return t.prod === ppn; });
+        });
+        if (!ms.length) return;
         var group = { kind: 'group', label: platformOfType(type) + ' · ' + type, sub: ms.length + ' 台', children: [] };
         rows.push(group);
         ms.forEach(function (m) {
@@ -234,7 +421,14 @@
     }
     if (g.mode !== 'cp') {
       Array.from(new Set(r.chambers.map(function(c){return c.eqp;}))).forEach(function(eqp){
-        var chambers=r.chambers.filter(function(c){return c.eqp===eqp;});
+        var chambers = r.chambers.filter(function(c){
+          if (c.eqp !== eqp) return false;
+          if (!ppn) return true;
+          return (c.batches || []).some(function (b) {
+            return (b.lots || []).some(function (lot) { return lot.prod === ppn; });
+          });
+        });
+        if (!chambers.length) return;
         var group = { kind: 'group', label: eqp, sub: chambers.length + ' 腔', children: [] };
         rows.push(group);
         chambers.forEach(function(c){
@@ -264,6 +458,7 @@
     var canvas = $('#gantt-canvas'), scroll = $('#gantt-scroll');
     if (!canvas || !scroll || !A.state.result) return;
     var r = A.state.result, g = A.state.gantt;
+    var ppn = g.ppn || '';
     var rows = buildGanttRows();
     var rangeDays = { '1d': 1, '3d': 3, '7d': 7, '30d': 30 }[g.range] || 1;
     var start = ganttStart(r, g, rangeDays), end = start + rangeDays * DAY;
@@ -316,20 +511,23 @@
     rows.forEach(function (row, idx) {
       if (row.kind !== 'machine') return;
       var res = row.res, y0 = row.y + 4, y1 = row.y + row.h - 4;
-      (res.wip || []).forEach(function (w) {
-        var ws = A.SCHED.parseDate(w.start), we = A.SCHED.parseDate(w.end);
-        if (we < start || ws > end) return;
-        ctx.fillStyle = '#65758b';
-        ctx.fillRect(xOf(ws), y0, Math.max(2, xOf(we) - xOf(ws)), y1 - y0);
-        addRegion(regions[idx], xOf(ws), xOf(we), y0, y1, 'wip', w, res);
-      });
-      if (res.locked && res.locked.some(function (iv) { return iv[1] === Infinity; })) {
-        ctx.fillStyle = '#65758b'; ctx.globalAlpha = .35;
-        ctx.fillRect(labelW, y0, plotW, y1 - y0); ctx.globalAlpha = 1;
+      if (!ppn) {
+        (res.wip || []).forEach(function (w) {
+          var ws = A.SCHED.parseDate(w.start), we = A.SCHED.parseDate(w.end);
+          if (we < start || ws > end) return;
+          ctx.fillStyle = '#65758b';
+          ctx.fillRect(xOf(ws), y0, Math.max(2, xOf(we) - xOf(ws)), y1 - y0);
+          addRegion(regions[idx], xOf(ws), xOf(we), y0, y1, 'wip', w, res);
+        });
+        if (res.locked && res.locked.some(function (iv) { return iv[1] === Infinity; })) {
+          ctx.fillStyle = '#65758b'; ctx.globalAlpha = .35;
+          ctx.fillRect(labelW, y0, plotW, y1 - y0); ctx.globalAlpha = 1;
+        }
       }
       if (res.kind === 'cp') {
-        res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
+        if (!ppn) res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
         res.tasks.forEach(function (task, i) {
+          if (ppn && task.prod !== ppn) return;
           if (task.end < start || task.start > end) return;
           visible++;
           var x1 = xOf(task.start), x2 = xOf(task.end);
@@ -341,9 +539,17 @@
           ctx.fillStyle = A.PLATFORM_COLORS[task.platform] || '#2f6bff';
           ctx.globalAlpha = .9; ctx.fillRect(x1, y0, w, y1 - y0); ctx.globalAlpha = 1;
           addRegion(regions[idx], x1, x1 + w, y0, y1, 'cp', task, res);
+          if (ppn && w > 58) {
+            ctx.save();
+            ctx.beginPath(); ctx.rect(x1, y0, w, y1 - y0); ctx.clip();
+            ctx.fillStyle = 'rgba(255,255,255,.94)';
+            ctx.font = '700 8px "PingFang SC", sans-serif';
+            ctx.fillText(task.lotId + ' · ' + task.step, x1 + 4, y0 + 12);
+            ctx.restore();
+          }
           var lc = row.stats && row.stats.lineFlags && row.stats.lineFlags[i];
           var lcMs = task.blockStart != null ? task.blockStart : task.start;
-          if (lc && lcMs >= start && lcMs <= end) {
+          if (!ppn && lc && lcMs >= start && lcMs <= end) {
             var lx = xOf(lcMs);
             drawLineChange(ctx, lx, y0, y1, rangeDays > 7);
             addRegion(regions[idx], lx - 4, lx + 4, rangeDays > 7 ? y0 - 1 : y0, rangeDays > 7 ? y0 + 5 : y1, 'linechange', {
@@ -354,29 +560,33 @@
             }, res);
           }
         });
-        res.borrows.forEach(function (b) {
-          if (b.end < start || b.start > end) return;
-          var bx1 = xOf(b.start), bx2 = xOf(b.end);
-          ctx.fillStyle = '#f3a58a';
-          ctx.fillRect(bx1, y1 - 3, Math.max(1.5, bx2 - bx1), 3);
-          addRegion(regions[idx], bx1, bx2, y1 - 5, y1, 'borrow', b, res);
-        });
+        if (!ppn) {
+          res.borrows.forEach(function (b) {
+            if (b.end < start || b.start > end) return;
+            var bx1 = xOf(b.start), bx2 = xOf(b.end);
+            ctx.fillStyle = '#f3a58a';
+            ctx.fillRect(bx1, y1 - 3, Math.max(1.5, bx2 - bx1), 3);
+            addRegion(regions[idx], bx1, bx2, y1 - 5, y1, 'borrow', b, res);
+          });
+        }
       } else {
-        res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
+        if (!ppn) res.pm.forEach(function (iv) { drawPM(ctx, xOf, iv[0], iv[1], y0, y1); addRegion(regions[idx], xOf(iv[0]), xOf(iv[1]), y0, y1, 'pm', iv, res); });
         res.batches.forEach(function (batch, i) {
           if (batch.end < start || batch.start > end) return;
+          if (ppn && !(batch.lots || []).some(function (lot) { return lot.prod === ppn; })) return;
           visible++;
           var bx1 = xOf(batch.start), bx2 = xOf(batch.end), bw = Math.max(1.6, bx2 - bx1);
           ctx.fillStyle = A.RECIPE_COLORS[batch.recipe] || '#e89b1c';
           ctx.globalAlpha = .92;
           roundRect(ctx, bx1, y0 + 1, bw, y1 - y0 - 2, 3); ctx.fill(); ctx.globalAlpha = 1;
           if (bw > 36) {
+            var lotsInBatch = ppn ? batch.lots.filter(function (lot) { return lot.prod === ppn; }).length : batch.lots.length;
             ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.font = '700 8px "PingFang SC", sans-serif';
-            ctx.fillText(batch.lots.length + ' lots', bx1 + 4, y0 + 11);
+            ctx.fillText(lotsInBatch + ' lots', bx1 + 4, y0 + 11);
           }
           addRegion(regions[idx], bx1, bx1 + bw, y0, y1, 'bake', batch, res);
           var lc = row.stats && row.stats.lineFlags && row.stats.lineFlags[i];
-          if (lc && batch.start >= start && batch.start <= end) {
+          if (!ppn && lc && batch.start >= start && batch.start <= end) {
             var lx = xOf(batch.start);
             drawLineChange(ctx, lx, y0, y1, rangeDays > 7);
             addRegion(regions[idx], lx - 4, lx + 4, rangeDays > 7 ? y0 - 1 : y0, rangeDays > 7 ? y0 + 5 : y1, 'linechange', {
@@ -397,11 +607,12 @@ function drawGanttChrome(ctx, rows, regions, visible, width, height, labelW, axi
     ctx.strokeStyle = '#e4e9f1'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(labelW - .5, 0); ctx.lineTo(labelW - .5, height); ctx.stroke();
     ctx.fillStyle = '#6b7a91'; ctx.font = '600 9px "PingFang SC", sans-serif';
-    ctx.fillText('资源 / 时间', 14, 20);
+    ctx.fillText(A.state.gantt.ppn ? '设备 / 时间' : '资源 / 时间', 14, 20);
     ctx.fillStyle = '#aab5c5'; ctx.font = '8px "PingFang SC", sans-serif';
-    ctx.fillText('机台 · 腔体', 14, 34);
+    ctx.fillText(A.state.gantt.ppn ? '仅本 PPN' : '机台 · 腔体', 14, 34);
+    var cols = statCols();
     var colX = LABEL_PAD + RES_W;
-    STAT_COLS.forEach(function (col) {
+    cols.forEach(function (col) {
       ctx.textAlign = 'right';
       ctx.fillStyle = '#6b7a91'; ctx.font = '600 9px "PingFang SC", sans-serif';
       ctx.fillText(col.label, colX + col.w - 8, 20);
@@ -412,7 +623,7 @@ function drawGanttChrome(ctx, rows, regions, visible, width, height, labelW, axi
     });
     ctx.strokeStyle = '#eef2f7'; ctx.lineWidth = 1;
     colX = LABEL_PAD + RES_W;
-    STAT_COLS.slice(0, -1).forEach(function (col) {
+    cols.slice(0, -1).forEach(function (col) {
       colX += col.w;
       var sx = Math.round(colX) + .5;
       ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, height); ctx.stroke();
@@ -462,7 +673,11 @@ function drawGanttChrome(ctx, rows, regions, visible, width, height, labelW, axi
     A.state.ganttRegions = regions;
     A.state.ganttGeom = { labelW: labelW, axisH: axisH, width: width, height: height, start: start, end: end, xOf: xOf, rows: rows };
     var stat = $('#gantt-footer-stat');
-    if (stat) stat.textContent = rows.filter(function (x) { return x.kind === 'machine'; }).length + ' 个资源 · ' + visible + ' 个任务/批次';
+    if (stat) {
+      var deviceCount = rows.filter(function (x) { return x.kind === 'machine'; }).length;
+      stat.textContent = deviceCount + ' 个设备 · ' + visible + ' 个任务/批次' +
+        (A.state.gantt.ppn ? '（仅 ' + A.state.gantt.ppn + '）' : '');
+    }
   }
 
   function roundRect(ctx, x, y, w, h, r) {
@@ -546,6 +761,15 @@ function ganttHit(e) {
     var html = '';
     if (hit.type === 'resource') {
       var s = hit.stats || {};
+      if (A.state.gantt.ppn) {
+        html = '<div class="tip-title">' + esc(hit.res.id) + ' · ' + esc(A.state.gantt.ppn) + '</div>' +
+          '<div class="tip-row"><span class="tip-muted">任务 / 批次</span><b>' + (s.ops || 0) + '</b></div>' +
+          '<div class="tip-row"><span class="tip-muted">占机工时</span><b>' + hoursText(s.occupiedMs) + '</b></div>' +
+          '<div class="tip-row"><span class="tip-muted">首单开始</span><span>' + (s.first == null ? '—' : fmtDateTime(s.first)) + '</span></div>' +
+          '<div class="tip-row"><span class="tip-muted">末单完成</span><span>' + (s.last == null ? '—' : fmtDateTime(s.last)) + '</span></div>' +
+          (hit.res.kind === 'cp' ? '' : '<div class="tip-row"><span class="tip-muted">口径</span><span>BAKE 按整批占腔计</span></div>');
+        showTip(html, e); return;
+      }
       html = '<div class="tip-title">' + esc(hit.res.id) + ' · 资源统计</div>' +
         '<div class="tip-row"><span class="tip-muted">换线（Recipe / 换卡）</span><b>' + (s.changes || 0) + ' 次</b></div>' +
         (hit.res.kind === 'cp' ? '<div class="tip-row"><span class="tip-muted">其中换卡（Setup）</span><span>' + (hit.res.setupCount || 0) + ' 次</span></div>' : '') +
@@ -576,12 +800,16 @@ function ganttHit(e) {
         '<div class="tip-row"><span class="tip-muted">针卡</span><span class="mono">' + esc(t.card) + '</span></div>' +
         '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(t.start) + ' → ' + A.SCHED.fmt(t.end, false) + '</span></div>' +
         '<div class="tip-row"><span class="tip-muted">加工 / 换卡</span><span>' + (t.duration / 60000).toFixed(0) + ' min + ' + (t.setup / 60000).toFixed(0) + ' min</span></div>' +
-        '<div class="tip-row"><span class="tip-muted">晶圆</span><span>' + t.wafer + ' pcs</span></div>';
+        '<div class="tip-row"><span class="tip-muted">晶圆</span><span>' + t.wafer + ' pcs</span></div>' +
+        (A.state.gantt.ppn ? '<div class="tip-row"><span class="tip-muted">占机工时</span><b>' +
+          Math.round((t.end - (t.blockStart != null ? t.blockStart : t.start)) / 60000) + ' min</b></div>' : '');
     } else if (hit.type === 'bake') {
       var b = hit.data;
       html = '<div class="tip-title">' + esc(b.id) + ' · ' + esc(b.recipe) + '</div>' +
         '<div class="tip-row"><span class="tip-muted">腔体</span><b>' + esc(b.chamber) + '</b></div>' +
         '<div class="tip-row"><span class="tip-muted">Lots / 片数</span><span>' + b.lots.length + ' / ' + b.wafers + '</span></div>' +
+        (A.state.gantt.ppn ? '<div class="tip-row"><span class="tip-muted">本 PPN Lots</span><b>' +
+          b.lots.filter(function (lot) { return lot.prod === A.state.gantt.ppn; }).length + ' / ' + b.lots.length + '</b></div>' : '') +
         '<div class="tip-row"><span class="tip-muted">时间</span><span>' + fmtDateTime(b.start) + ' → ' + A.SCHED.fmt(b.end, false) + '</span></div>' +
         '<div class="tip-row"><span class="tip-muted">时长</span><span>' + (b.duration / HOUR).toFixed(1) + ' h</span></div>';
     } else if (hit.type === 'wip') {
@@ -616,21 +844,72 @@ function ganttHit(e) {
   }
   function hideTip() { var t = $('#gantt-tip'); if (t) t.style.display = 'none'; }
 
-  function locateLot(q) {
-    q = (q || '').trim().toUpperCase();
-    if (!q || !A.state.result) return;
-    var task = A.state.result.cpTasks.filter(function (t) { return t.lotKey === q || t.lotId.toUpperCase() === q; })[0];
-    if (!task) {
-      var lot = A.state.result.lots.filter(function (l) { return l.key === q || l.id.toUpperCase() === q; })[0];
-      if (lot && lot.cpTasks.length) task = lot.cpTasks[0];
+  function ppnCandidates() {
+    var seen = {}, out = [];
+    (A.state.result.lots || []).forEach(function (lot) {
+      if (!seen[lot.prod]) { seen[lot.prod] = true; out.push(lot.prod); }
+    });
+    return out.sort();
+  }
+
+  /* 支持完整 PPN、PPN 前缀、带厂家后缀的 PPN，以及直接粘贴 Lot 号。 */
+  function resolvePpn(q) {
+    var raw = (q || '').trim().toUpperCase();
+    if (!raw) return { ppn: null };
+    var ppns = ppnCandidates();
+    if (ppns.indexOf(raw) >= 0) return { ppn: raw, exact: true, matches: [raw] };
+    var base = raw.split('-')[0];
+    if (base && ppns.indexOf(base) >= 0) return { ppn: base, exact: true, matches: [base] };
+    var lot = (A.state.result.lots || []).filter(function (l) {
+      return l.id.toUpperCase() === raw || String(l.key).toUpperCase() === raw;
+    })[0];
+    if (lot) return { ppn: lot.prod, exact: true, matches: [lot.prod], viaLot: true };
+    var matches = ppns.filter(function (p) { return p.indexOf(raw) === 0; });
+    if (!matches.length) matches = ppns.filter(function (p) { return p.indexOf(raw) >= 0; });
+    return { ppn: matches[0] || null, exact: false, matches: matches };
+  }
+
+  function fitPpnRange(ppn) {
+    var r = A.state.result, g = A.state.gantt;
+    var summary = ppnSummary(ppn);
+    if (!summary.rows.length || summary.first == null) {
+      g.range = '30d';
+      g.anchor = r.start;
+      return;
     }
-    if (!task) { A.toast('未找到 Lot：' + q); return; }
-    A.state.gantt.anchor = A.SCHED.parseDate(A.SCHED.dayKey(task.start));
-    A.state.gantt.range = '1d';
-    A.state.gantt.mode = 'cp';
-    A.state.gantt.platform = task.platform;
-    A.navigate('gantt');
-    A.toast('已定位 ' + task.lotId + ' @ ' + task.machine + ' · ' + fmtDateTime(task.start));
+    var span = Math.max(0, summary.last - summary.first);
+    g.range = span <= DAY ? '1d' : span <= 3 * DAY ? '3d' : span <= 7 * DAY ? '7d' : '30d';
+    g.anchor = A.SCHED.parseDate(A.SCHED.dayKey(summary.first));
+    g.anchor = Math.max(r.start, Math.min(r.monthEnd - DAY, g.anchor));
+  }
+
+  function searchPpn(q) {
+    if (!A.state.result) return;
+    q = (q || '').trim();
+    if (!q) { clearPpn(); return; }
+    var found = resolvePpn(q);
+    if (!found.ppn) { A.toast('未找到 PPN：' + q.toUpperCase()); return; }
+    var g = A.state.gantt;
+    g.ppn = found.ppn;
+    g.q = found.ppn;
+    g.mode = 'all';
+    fitPpnRange(found.ppn);
+    var summary = ppnSummary(found.ppn);
+    g.platform = summary.platforms.length === 1 && A.state.data.platformType[summary.platforms[0]]
+      ? summary.platforms[0] : 'all';
+    if (A.state.view === 'gantt') A.renderGantt(); else A.navigate('gantt');
+    var extra = found.exact ? '' : '（模糊匹配 ' + found.matches.length + ' 个，已选第一个）';
+    A.toast('已加载 ' + found.ppn + ' · ' + summary.lots.length + ' lots · ' + summary.rows.length + ' 道工序' + extra);
+  }
+
+  function clearPpn() {
+    var g = A.state.gantt;
+    if (!g.ppn && !g.q) return;
+    g.ppn = '';
+    g.q = '';
+    g.platform = 'all';
+    g.mode = 'all';
+    if (A.state.view === 'gantt' && A.state.result) A.renderGantt();
   }
 
   A.renderGantt = renderGantt;
@@ -638,7 +917,10 @@ function ganttHit(e) {
   A.ganttHit = ganttHit;
   A.onGanttMove = onGanttMove;
   A.hideTip = hideTip;
-  A.locateLot = locateLot;
+  A.searchPpn = searchPpn;
+  A.clearPpn = clearPpn;
+  A.locateLot = searchPpn;
+  A.ppnSummary = ppnSummary;
   A.resourceStats = resourceStats;
   A.ganttLabelWidth = labelWidth;
 })();
