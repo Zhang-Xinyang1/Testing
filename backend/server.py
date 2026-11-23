@@ -19,6 +19,7 @@ from production_jobs import TrialJobs
 from production_demo import demo_catalog, check_examples
 from production_excel import excel_snapshot
 from production_chart import chart_projection
+from production_store import StateConflict
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -173,6 +174,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def production_state(self, state):
         state=dict(state)
+        state.pop('factBaseline',None)
+        if state.get('snapshot'):
+            from production_time import now_ms, milliseconds, live_facts
+            from production_rules import rules
+            now=now_ms()
+            state['dataAgeMinutes']=round((now-milliseconds(state['snapshot']['asOf']))/60000,1)
+            try:
+                live_facts(state['snapshot'],rules(state['rules']),now)
+                state['liveTimeIssue']=None
+            except (ValueError,KeyError) as error:
+                state['liveTimeIssue']=str(error)
         state['chart']=chart_projection(state['active']) if state.get('active') else None
         return state
 
@@ -213,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.production_state(archive_production(self.server.config_path,self.production_jobs().plan(body.get('id')))))
             return self._json(self.production_state(production_update(self.server.config_path,action,body)))
         except Exception as error:
-            return self._json(error_response(error),400)
+            return self._json(error_response(error),409 if isinstance(error,StateConflict) else 400)
 
     def persist_config(self, cfg):
         fd, temp = tempfile.mkstemp(dir=os.path.dirname(self.server.config_path), suffix='.tmp')

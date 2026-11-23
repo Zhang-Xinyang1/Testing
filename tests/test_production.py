@@ -48,8 +48,9 @@ class ProductionRuleTests(unittest.TestCase):
         result=run(d,{'bakeWindowHours':0})
         self.assertEqual(result['borrows'][0]['recipeAtStart'],'R')
         d['borrow'][0]['recipe']='OLD'
-        with self.assertRaisesRegex(TaskConstraintError,'Recipe 不匹配'):
-            run(d,{'bakeWindowHours':0})
+        result=run(d,{'bakeWindowHours':0})
+        self.assertEqual(result['borrows'][0]['recipeAtStart'],'OLD')
+        self.assertGreaterEqual(result['cpTasks'][0]['blockStart'],result['borrows'][0]['end'])
 
     def test_last_processing_end_defines_completion_rest_is_information_only(self):
         d=fixture(1); d['productionRules']=rules()
@@ -233,10 +234,9 @@ class ProductionWorkspaceTests(unittest.TestCase):
                 self.assertEqual(plan['id'],job['plan']['id'])
                 request('/adopt',{'id':job['id'],'reason':'HTTP 验证选用'})
                 self.assertEqual(len(request()['history']),1)
-                with self.assertRaises(urllib.error.HTTPError) as caught:
-                    request('/adopt',{'id':job['id'],'reason':'重复选用'})
-                self.assertEqual(caught.exception.code,400)
-                self.assertIn('已变化',json.load(caught.exception)['error'])
+                retry=request('/adopt',{'id':job['id'],'reason':'重复选用'})
+                self.assertEqual(retry['active']['id'],job['plan']['id'])
+                self.assertEqual(retry['active']['adoptReason'],'HTTP 验证选用')
                 self.assertEqual(config.read_text(),'{}')
             finally:
                 if hasattr(server,'trial_jobs'):server.trial_jobs.close()

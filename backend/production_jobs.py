@@ -60,7 +60,9 @@ class TrialJobs:
                             job.update(status='completed',message='试排完成，尚未选用')
                             break
                         else:
-                            job.update(status='failed',message=message['message'],plan=None)
+                            verified=job.get('plan') and job['plan'].get('validation',{}).get('passed')
+                            job.update(status='failed',message=message['message']+('；保留最后一份已通过校验的候选，选用时仍需复核' if verified else ''),
+                                       plan=job['plan'] if verified else None)
                             break
                 with self.lock:
                     elapsed = time.monotonic()-job['started']
@@ -77,7 +79,9 @@ class TrialJobs:
             receiver.close()
             with self.lock:
                 if job['status']=='running':
-                    job.update(status='failed',message='计算进程提前结束，请重试',plan=None)
+                    verified=job.get('plan') and job['plan'].get('validation',{}).get('passed')
+                    job.update(status='failed',message='计算进程提前结束；'+('保留已校验候选，选用时需复核' if verified else '尚无可行候选，请重试'),
+                               plan=job['plan'] if verified else None)
                 job['elapsedSeconds']=round(time.monotonic()-job['started'],1)
 
     def read(self):

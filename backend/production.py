@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from input_rules import identifier, parse_datetime
 from production_rules import rules
-from schedule_history import _write
+import production_store as store
+from production_facts import complete_import, digest as snapshot_digest, reconcile, pm_lifecycle
 from scheduler import run, compact_result, make_json_safe, parse_date, iso_date, HOUR, DAY
 
 LOCK = threading.RLock()
@@ -35,20 +36,14 @@ def folder(config):
 
 
 def read_state(config):
-    path = folder(config) / 'state.json'
-    if path.exists():
-        return json.loads(path.read_text(encoding='utf-8'))
-    return {'revision':0, 'snapshot':None, 'rules':rules(), 'active':None,
-            'history':[], 'events':[], 'lastCheck':None, 'changePending':False}
+    state=store.read(config, lambda: {'revision':0, 'snapshot':None, 'rules':rules(), 'active':None,
+            'history':[], 'events':[], 'lastCheck':None, 'changePending':False})
+    state['rules']=rules(state['rules'])
+    return state
 
 
 def write_state(config, state):
-    folder(config).mkdir(parents=True, exist_ok=True)
-    _write(folder(config) / 'state.json', state)
-    source=(state.get('snapshot') or {}).get('source') or state.get('selectedSource')
-    if source in ('excel','mes','demo'):
-        directory=folder(config)/'sources';directory.mkdir(exist_ok=True)
-        _write(directory/(source+'.json'),state)
+    return store.save(config,state)
 
 
 def source_state(config, state, source):
@@ -57,11 +52,10 @@ def source_state(config, state, source):
         raise ValueError('数据来源须为 Excel、MES 或演示')
     current=(state.get('snapshot') or {}).get('source') or state.get('selectedSource')
     if current==source:return state
-    write_state(config,state)
-    path=folder(config)/'sources'/(source+'.json')
-    if path.exists():return json.loads(path.read_text(encoding='utf-8'))
-    return dict(revision=0,snapshot=None,rules=rules(),active=None,history=[],events=[],
+    restored=store.source(config,source) or dict(revision=0,snapshot=None,rules=rules(),active=None,history=[],events=[],
                 lastCheck=None,changePending=False,selectedSource=source)
+    restored['_storeVersion']=state.get('_storeVersion',-1)
+    return restored
 
 
 def month_bounds(month):
@@ -74,10 +68,12 @@ def validate_snapshot(raw):
     if not isinstance(raw, dict):
         raise ValueError('MES 快照必须为对象')
     d = copy.deepcopy(raw)
+    complete_import(d)
+    d['factIssues']=[]
     for key in ('snapshotId','asOf','month','demands','lots','equipment','flows','recipes'):
         if key not in d:
             raise ValueError('MES 快照缺少字段：' + key)
-    if d.get('schemaVersion') != 1 or d.get('source') not in ('mes','demo','excel'):
+    if type(d.get('schemaVersion')) is not int or d.get('schemaVersion') != 1 or d.get('source') not in ('mes','demo','excel'):
         raise ValueError('schemaVersion 必须为 1，source 必须为 mes、demo 或 excel')
     if type(d.get('identityStable', False)) is not bool:
         raise ValueError('identityStable 必须为布尔值')
@@ -106,7 +102,7 @@ def validate_snapshot(raw):
             raise ValueError(table + ' 必须为记录列表')
     if len(d['lots']) > 20000:
         raise ValueError('首版单次快照最多支持 20000 个 Lot')
-    products, eqps, ids = set(), {}, set()
+    products, eqps, ids, probers = set(), {}, set(), {}
     for row in d['demands']:
         row['ppn'] = identifier(row.get('ppn'))
         if not row['ppn'] or '-' in row['ppn'] or row['ppn'] in products:
@@ -121,6 +117,10 @@ def validate_snapshot(raw):
         if row['status'] not in ('RUN','DOWN','PM','OFFLINE'):
             raise ValueError('设备状态须为 RUN/DOWN/PM/OFFLINE')
         eqps[row['id']] = row
+        if row['proberId']:
+            if row['proberId'] in probers:
+                d['factIssues'].append('Prober %s 同时配对多台 EQP，需核实当前有效装配关系'%row['proberId'])
+            probers[row['proberId']]=row['id']
     if not eqps or not products:
         raise ValueError('快照至少需要一项需求和一台设备')
     if not isinstance(d['flows'], dict) or any(
@@ -158,6 +158,8 @@ def validate_snapshot(raw):
     quantity(d.get('bakeChambers', 4), 'BAKE 腔体', 1, 100)
     types = {row['type'] for row in eqps.values() if 'OVEN' not in row['type']}
     for index,row in enumerate(d['lots']):
+        if row.get('uid') is not None and not isinstance(row['uid'],str):
+            raise ValueError('Lot uid 必须按字符串传输，不能先转浮点数')
         for key in ('ppn','state','platform'):
             row[key] = identifier(row.get(key))
         row['platform'] = ';'.join(dict.fromkeys(identifier(part) for part in row['platform'].split(';') if identifier(part)))
@@ -169,7 +171,7 @@ def validate_snapshot(raw):
         if row['uid'] in ids:
             raise ValueError('Lot uid 重复：' + row['uid'])
         ids.add(row['uid'])
-        if not str(row.get('lotId','')).strip() or row['ppn'] not in products or row['state'] not in STATES:
+        if not isinstance(row.get('lotId'),str) or not row['lotId'].strip() or row['ppn'] not in products or row['state'] not in STATES:
             raise ValueError('LotID、PPN 或状态无效')
         quantity(row.get('wafer'), 'Lot wafer', 1, 25)
         if not row['platform'] or set(row['platform'].split(';')) - types:
@@ -190,8 +192,10 @@ def validate_snapshot(raw):
                 raise ValueError('在制 current 必须为当前工序占用对象')
             for key in ('eqp','recipe','card','chamber','step'):
                 current[key] = identifier(current.get(key))
-            if current['eqp'] not in eqps or not date(current.get('start'),'当前工序开始') <= asof < date(current.get('end'),'预计释放'):
+            if current['eqp'] not in eqps or not date(current.get('start'),'当前工序开始') <= asof or date(current.get('end'),'预计释放')<=date(current.get('start'),'当前工序开始'):
                 raise ValueError('在制当前工序须覆盖快照时点，且设备存在')
+            if date(current['end'],'预计释放')<=asof:
+                d['factIssues'].append('在制 Lot %s 预计释放已过期，实际释放待确认'%row['lotId'])
             if 'OVEN' in eqps[current['eqp']]['type']:
                 if not re.fullmatch(re.escape(current['eqp']) + r'-C[1-9]\d*', current['chamber']) or int(current['chamber'].rsplit('-C',1)[1]) > d.get('bakeChambers',4):
                     raise ValueError('BAKE 在制需要有效腔体编号')
@@ -200,10 +204,14 @@ def validate_snapshot(raw):
                 if current['step'] != 'BAKE':
                     raise ValueError('烤箱在制工序须为 BAKE')
             elif current['recipe'] not in recipes or current['card'] not in recipes[current['recipe']]:
-                raise ValueError('CP 在制需要有效 Recipe 与针卡')
+                d['factIssues'].append('在制 Lot %s 的 Recipe/针卡无法关联，已保留实际占用，需核对'%row['lotId'])
             elif not current['step'].startswith('CP'):
                 raise ValueError('CP 在制必须提供当前 CP 工序')
             row['current'] = current
+            if not any(op[0]==current['step'] and op[1]==current['recipe'] for op in d['flows'][row['ppn']]):
+                d['factIssues'].append('在制 Lot %s 当前工序/Recipe 不属于已提供路线，已保留占用，需补齐路线版本'%row['lotId'])
+            if 'OVEN' not in eqps[current['eqp']]['type'] and eqps[current['eqp']]['type'] not in row['platform'].split(';'):
+                d['factIssues'].append('在制 Lot %s 的当前机台不符合 Platform，需核对实际装配'%row['lotId'])
         if row.get('externalComplete'):
             if row['state'] != 'RUNNING' or date(row['externalComplete'],'外部完工预测') < date(row['current']['end'],'预计释放'):
                 raise ValueError('外部完工预测仅适用于在制，且不得早于当前工序释放')
@@ -228,18 +236,50 @@ def validate_snapshot(raw):
             raise ValueError('外部占用结束状态需要有效 Recipe 与针卡')
     # Reuse the established pairing/window validator for PM and constraints.
     from input_rules import pm_events
+    all_pm_ids=set()
     for p in d['pm']:
+        p['eqp']=identifier(p.get('eqp'));p['targetKind']=identifier(p.get('targetKind'))
+        # PM windows are local calendar dates, whereas start/end are instants.
+        for key in ('early','due','over'):
+            if p.get(key):p[key]=date(p[key],'PM '+key).astimezone(CST).date().isoformat()
+        status=identifier(p.get('state') or 'PLANNED')
+        p['state']={'COMPLETED':'DONE','IN_PROGRESS':'RUNNING','CANCELED':'CANCELLED'}.get(status,status)
+        if p.get('id') is not None:
+            if not isinstance(p['id'],str) or not p['id'].strip():raise ValueError('PM id 必须为非空字符串')
+            p['id']=identifier(p['id'])
+            if p['id'] in all_pm_ids:raise ValueError('PM id 重复，需先按任务版本去重')
+            all_pm_ids.add(p['id'])
+        if p.get('version') is not None and (type(p['version']) is not int or p['version']<0):
+            raise ValueError('PM version 必须为非负整数')
+    active_pm=pm_lifecycle(d)
+    pm_ids=set()
+    for p in active_pm:
+        if not p.get('id') and (d['source']=='mes' or p['state']=='RUNNING'):
+            d['factIssues'].append('MES/执行中 PM 缺少稳定字符串 id，无法跨快照核对维护与释放')
+        if p.get('id') is not None and (not isinstance(p['id'],str) or not p['id'].strip()):
+            raise ValueError('PM id 必须为非空字符串')
+        if p.get('id') in pm_ids:
+            raise ValueError('PM id 重复，需按任务版本去重')
+        if p.get('id'):pm_ids.add(p['id'])
         p['eqp'] = identifier(p.get('eqp'))
         p['targetKind'] = identifier(p.get('targetKind'))
         early,due,over = (date(p.get(k),'PM '+k) for k in ('early','due','over'))
         hours = p.get('hours')
         if not early.date() <= due.date() <= over.date() or isinstance(hours,bool) or not isinstance(hours,(int,float)) or not math.isfinite(hours) or not 0 < hours <= 744:
             raise ValueError('PM 窗口或时长无效')
-        if p.get('start'):
+        if p.get('start') and p['state']=='PLANNED':
             begin = date(p['start'],'PM 开始')
             if begin < early or begin + timedelta(hours=hours) > over.replace(hour=0,minute=0,second=0,microsecond=0)+timedelta(days=1):
                 raise ValueError('PM 指定时间超出维护窗口')
-    pm_events({'eqp':d['equipment'], 'pm':d['pm'], 'bakeResources':{'chambers':d.get('bakeChambers',4)}})
+        if p['state']=='RUNNING':
+            if not p.get('start') or not p.get('expectedEnd'):
+                d['factIssues'].append('执行中 PM 需要实际 start 和 expectedEnd；不以预计总工时猜测释放')
+            elif date(p['start'],'PM 实际开始')>asof or date(p['expectedEnd'],'PM 预计释放')<=asof:
+                d['factIssues'].append('执行中 PM 的时间不覆盖当前时点，释放待确认')
+            if p.get('start') and p.get('expectedEnd') and date(p['expectedEnd'],'PM 预计释放')<=date(p['start'],'PM 开始'):
+                raise ValueError('PM 预计释放必须晚于实际开始')
+    pm_events({'eqp':d['equipment'], 'pm':[p for p in active_pm if p['state']=='PLANNED'], 'bakeResources':{'chambers':d.get('bakeChambers',4)}})
+    # Preserve original lifecycle records. Active events are derived in prepare.
     for row in d['constraints']:
         row['eqp'], row['recipe'] = identifier(row.get('eqp')), identifier(row.get('recipe'))
         if row['eqp'] not in eqps or row['recipe'] not in recipes:
@@ -249,7 +289,9 @@ def validate_snapshot(raw):
 
 def context_hash(state):
     return identity({'snapshot':state['snapshot'], 'rules':state['rules'],
-                     'active':(state.get('active') or {}).get('id')})
+                     'active':(state.get('active') or {}).get('id'),
+                     'factIssues':state.get('factIssues',[]),
+                     'receiptFailure':state.get('receiptFailure')})
 
 
 def record_change(state, kind, reason):
@@ -258,18 +300,42 @@ def record_change(state, kind, reason):
     state['changePending'] = True
 
 
+def review_facts(state, old, snapshot):
+    baseline=state.get('factBaseline') or old
+    issues=reconcile(baseline,snapshot)
+    state['factIssues']=issues
+    if not issues or not baseline:
+        state['factBaseline']=copy.deepcopy(snapshot)
+    else:
+        # A rejected reconciliation must not erase obligations seen in an
+        # earlier or partially inconsistent snapshot, even after many retries.
+        baseline=copy.deepcopy(baseline);known={l['uid'] for l in baseline['lots']}
+        baseline['lots'].extend(copy.deepcopy(l) for l in snapshot['lots']
+                                if l['state'] in ('RUNNING','DONE') and l['uid'] not in known)
+        known_pm={p.get('id') for p in baseline.get('pm',[])}
+        baseline.setdefault('pm',[]).extend(copy.deepcopy(p) for p in snapshot.get('pm',[])
+                                           if p.get('id') and p['id'] not in known_pm)
+        state['factBaseline']=baseline
+
+
 def update(config, action, body):
     with LOCK:
         state = read_state(config)
+        starting_source=(state.get('snapshot') or {}).get('source') or state.get('selectedSource')
+        receipt_identity=None
         if action == 'source':
             state=source_state(config,state,body.get('source'))
         elif action == 'excel':
             state=source_state(config,state,'excel')
             if state.get('snapshot')==body:
-                write_state(config,state)
+                cleared=state.pop('receiptFailure',None)
+                if cleared or starting_source!='excel':write_state(config,state)
                 return state
             old=state.get('snapshot')
             state['snapshot']=copy.deepcopy(body)
+            review_facts(state,old,body)
+            state.pop('receiptFailure',None)
+            receipt_identity=('excel',body['snapshotId'],snapshot_digest(body))
             if old and old['month']!=body['month']:state['active']=None
             record_change(state,'Excel 接收','已保存的 Excel 数据已接入统一排产；请检查待补充项后试排')
         elif action == 'demo':
@@ -281,6 +347,9 @@ def update(config, action, body):
             state['rules'] = pack['rules']
             state['active'] = None
             state['lastCheck'] = None
+            state['factIssues']=[]
+            state['factBaseline']=copy.deepcopy(state['snapshot'])
+            state.pop('receiptFailure',None)
             record_change(state, '模拟数据', '载入 '+state['snapshot']['demoCase']['title']+'；应用演示规则，等待人工试排')
         elif action == 'demo-event':
             from production_demo import demo_event
@@ -290,15 +359,27 @@ def update(config, action, body):
             state['snapshot']=validate_snapshot(snapshot)
             record_change(state,'一键模拟变化',reason)
         elif action == 'snapshot':
-            snapshot = validate_snapshot(body)
+            try:
+                snapshot = validate_snapshot(body)
+            except (ValueError,TypeError,KeyError) as error:
+                state['receiptFailure']={'time':stamp(),'message':str(error)}
+                state['changePending']=True
+                write_state(config,state)
+                raise
             state=source_state(config,state,snapshot['source'])
             old = state.get('snapshot')
-            if old == snapshot:
-                write_state(config,state)
+            if old and snapshot_digest(old)==snapshot_digest(snapshot):
+                cleared=state.pop('receiptFailure',None)
+                if cleared or starting_source!=snapshot['source']:write_state(config,state)
                 return state
+            if old and old['snapshotId']==snapshot['snapshotId'] and snapshot['source']!='demo':
+                raise ValueError('同一快照 ID 对应不同业务内容，请提供新的 snapshotId')
             if old and snapshot['source'] == old['source'] and parse_date(snapshot['asOf']) < parse_date(old['asOf']):
                 raise ValueError('拒绝早于当前时点的过期快照')
             state['snapshot'] = snapshot
+            review_facts(state,old,snapshot)
+            state.pop('receiptFailure',None)
+            if snapshot['source']!='demo':receipt_identity=(snapshot['source'],snapshot['snapshotId'],snapshot_digest(snapshot))
             if old and (old['source'] != snapshot['source'] or old['month'] != snapshot['month']):
                 state['active'] = None
             record_change(state, 'MES 快照', '接收快照 ' + str(snapshot['snapshotId']))
@@ -331,7 +412,7 @@ def update(config, action, body):
             record_change(state, body['kind'], reason)
         else:
             raise ValueError('未知生产工作台操作')
-        write_state(config, state)
+        store.save(config,state,snapshot_identity=receipt_identity)
         return state
 
 
@@ -355,12 +436,25 @@ def prepare(state, request):
         raise ValueError('请先接收 Excel、MES 或演示数据')
     if state['snapshot'].get('inputIssues'):
         raise ValueError('Excel 待补充：'+'；'.join(state['snapshot']['inputIssues'][:8]))
+    if state.get('receiptFailure'):
+        raise ValueError('最近一次数据接收失败，请重新接收完整数据后试排：'+state['receiptFailure']['message'])
+    if state.get('factIssues'):
+        raise ValueError('生产事实待核对：'+'；'.join(state['factIssues'][:8]))
     d = validate_snapshot(state['snapshot'])
+    if d.get('factIssues'):
+        raise ValueError('生产事实待核对：'+'；'.join(d['factIssues'][:8]))
     r = rules(state['rules'])
+    from production_time import execution_context
+    execution=execution_context(d,r,request)
     asof = parse_date(d['asOf'])
+    planning_start=execution['start']
     first, last = month_bounds(d['month'])
     end = last.timestamp() * 1000
+    if planning_start>=end:
+        raise ValueError('计划可执行起点已超出当前月份，请接收下一月需求和生产快照')
     baseline = state.get('active')
+    if execution['mode']=='live' and baseline and baseline.get('execution',{}).get('mode')!='live':
+        baseline=None
     scenario = request.get('scenario','actual')
     if scenario not in ('actual','expansion'):
         raise ValueError('资源场景无效')
@@ -369,7 +463,7 @@ def prepare(state, request):
     if baseline and r['freezeHours']:
         if not d.get('identityStable') or not baseline.get('identityStable'):
             raise ValueError('跨快照冻结需要稳定 Lot 标识，当前标识待确认')
-        cutoff = asof + r['freezeHours'] * HOUR
+        cutoff = planning_start + r['freezeHours'] * HOUR
         frozen_ids = {lot['uid'] for lot in baseline['lots'] if any(asof <= t.get('blockStart',t['start']) < cutoff for t in lot.get('tasks',[]))}
         # Preserve whole shared BAKE batches when one member is frozen.
         while True:
@@ -417,6 +511,14 @@ def prepare(state, request):
         oven = next((e for e in eqp if e['id']==b['resource'] and 'OVEN' in e['type']), None)
         resources = [oven['id']+'-C%d' % c for c in range(1,d.get('bakeChambers',4)+1)] if oven else [b['resource']]
         blocks.extend(dict(b, resource=resource, start=parse_date(b['start']), end=parse_date(b['end'])) for resource in resources)
+    from input_rules import resolve_pm_target
+    pending_pm=[]
+    for pm in pm_lifecycle(d):
+        if pm['state']=='RUNNING':
+            target=resolve_pm_target({'eqp':eqp,'bakeResources':{'chambers':d.get('bakeChambers',4)}},pm)
+            blocks.extend(dict(resource=resource,start=parse_date(pm['start']),end=parse_date(pm['expectedEnd']),
+                               reason='执行中 PM',kind='running-pm') for resource in target['resources'])
+        else:pending_pm.append(pm)
     rows, source, wip, held = [], [], [], []
     for lot in d['lots']:
         if lot['state'] == 'DONE' or lot['uid'] in frozen_ids:
@@ -425,7 +527,7 @@ def prepare(state, request):
             held.append(dict(lot, reason=lot.get('holdReason') or ('缺少内部出货日' if not lot.get('shipDue') else '缺少明确可用时间')))
             continue
         rows.append([lot['lotId'],lot['ppn'],lot['platform'],lot['wafer'],
-                     iso_date(max(asof,parse_date(lot.get('availableAt')) or asof)),'W1',last.date().isoformat(),lot.get('shipDue') or last.isoformat(),1])
+                     iso_date(max(planning_start,parse_date(lot.get('availableAt')) or asof)),'W1',last.date().isoformat(),lot.get('shipDue') or last.isoformat(),1])
         source.append(lot)
         if lot['state'] == 'RUNNING':
             wip.append(dict(lot['current'],lotId=lot['lotId'],lotKey='LOT-%06d' % len(rows)))
@@ -433,13 +535,16 @@ def prepare(state, request):
     for demand in d['demands']:
         done = sum(l['wafer'] for l in d['lots'] if l['ppn']==demand['ppn'] and l['state']=='DONE' and first.timestamp()*1000 <= parse_date(l['actualComplete']) < end)
         kept = sum(l['wafer'] for l in frozen if l['ppn']==demand['ppn'] and l.get('complete') is not None and l['complete'] < end)
+        external=sum(l['wafer'] for l in d['lots'] if l['ppn']==demand['ppn'] and l['state']=='RUNNING' and l.get('externalComplete') and asof<=parse_date(l['externalComplete'])<end)
         types = sorted({t for l in d['lots'] if l['ppn']==demand['ppn'] for t in l['platform'].split(';')})
-        targets.append({'ppn':demand['ppn'],'platform':';'.join(types),'mps':max(0,demand['wafer']-done-kept)})
-    data = {'meta':{'start':d['asOf'],'monthEnd':last.isoformat(),'days':math.ceil((end-asof)/DAY),'month':d['month']},
+        targets.append({'ppn':demand['ppn'],'platform':';'.join(types),'mps':max(0,demand['wafer']-done-kept-external)})
+    data = {'meta':{'start':iso_date(planning_start),'monthEnd':last.isoformat(),'days':math.ceil((end-planning_start)/DAY),'month':d['month']},
             'mps':targets, 'eqp':eqp, 'flows':d['flows'], 'recipes':d['recipes'], 'lots':rows,
-            'pm':d['pm'], 'borrow':d['borrow'], 'wip':wip, 'weekly':[], 'constraints':d['constraints'],
+            'pm':pending_pm, 'borrow':d['borrow'], 'wip':wip, 'weekly':[], 'constraints':d['constraints'],
             'fixedBlocks':blocks,'productionRules':r,'bakeResources':{'chambers':d.get('bakeChambers',4)},
-            'platformType':{}, 'cardType':{}}
+            'platformType':{}, 'cardType':{},'execution':execution,
+            'productionSnapshot':d,'productionLotUids':[l['uid'] for l in source],
+            'productionFrozen':frozen}
     # Only an explicitly identical BAKE batch can share a WIP interval.
     calendars = {}
     for b in blocks:
@@ -476,10 +581,14 @@ def project(state, request, prepared, result):
     first,last = month_bounds(d['month'])
     start,end,asof = first.timestamp()*1000,last.timestamp()*1000,parse_date(d['asOf'])
     mapped = {('LOT-%06d' % (i+1)):lot for i,lot in enumerate(source)}
+    candidate_context=context_hash(state)
     lots = copy.deepcopy(frozen)
     for item in result['lots']:
         row = mapped[item['key']]
-        lots.append(dict(row, tasks=item['routeTasks'], complete=item.get('complete'),
+        tasks=copy.deepcopy(item['routeTasks'])
+        for task in tasks:
+            if task.get('batchId'):task['batchId']='R-'+candidate_context[:12]+'-'+task['batchId']
+        lots.append(dict(row, tasks=tasks, complete=item.get('complete'),
                          restEnd=item.get('restEnd'), reason=item.get('unscheduledReason'), frozen=False))
     ids = {l['uid'] for l in lots}
     for row in d['lots']:
@@ -489,11 +598,18 @@ def project(state, request, prepared, result):
             lots.append(dict(row,tasks=[],complete=completed,restEnd=completed+336*HOUR if completed else None,reason=reason))
     baseline = state.get('active')
     old_products = {p['ppn']:p for p in (baseline or {}).get('products',[])}
+    from production_ledger import output_ledger
+    ledger=output_ledger(d,lots)
+    totals={p['ppn']:p for p in ledger['products']}
+    by_uid={entry['uid']:entry for entry in ledger['rows']}
+    for lot in lots:
+        lot['complete']=by_uid[lot['uid']]['complete']
+        lot['restEnd']=lot['complete']+336*HOUR if lot['complete'] is not None else None
     products, alerts = [], []
     for demand in d['demands']:
         ppn = demand['ppn']; selected = [l for l in lots if l['ppn']==ppn]
-        actual = sum(l['wafer'] for l in selected if l['state']=='DONE' and start <= l['complete'] < end)
-        forecast = actual + sum(l['wafer'] for l in selected if l['state']!='DONE' and l.get('complete') is not None and asof <= l['complete'] < end)
+        actual = totals[ppn]['actual']
+        forecast = totals[ppn]['forecast']
         old = old_products.get(ppn)
         old_by_now = sum(l['wafer'] for l in (baseline or {}).get('lots',[]) if l['ppn']==ppn and l.get('complete') is not None and start <= l['complete'] <= asof)
         missing = sum(l['wafer'] for l in selected if l['state']=='RUNNING' and not l.get('externalComplete'))
@@ -522,14 +638,23 @@ def project(state, request, prepared, result):
             elif old.get('tasks') != lot.get('tasks') or old.get('complete') != lot.get('complete'):
                 changes.append({'uid':lot['uid'],'lotId':lot['lotId'],'kind':'时间或资源变化','before':old.get('complete'),'after':lot.get('complete')})
         changes += [{'uid':l['uid'],'lotId':l['lotId'],'kind':'不在新快照中，待核对','before':l.get('complete'),'after':None} for l in old_lots.values() if l['uid'] not in {x['uid'] for x in lots}]
-    return {'id':uuid.uuid4().hex, 'createdAt':stamp(),'contextHash':context_hash(state),
+    execution=copy.deepcopy(data['execution'])
+    if execution['mode']=='live':
+        boundaries=[t.get('blockStart',t['start']) for lot in lots for t in lot['tasks']]
+        boundaries.extend(pm['start'] for pm in result['pmRecords'])
+        execution['validUntil']=min([execution['validUntil']]+boundaries)
+    plan={'id':uuid.uuid4().hex, 'createdAt':stamp(),'contextHash':candidate_context,
             'baselineId':(baseline or {}).get('id'),
             'snapshotHash':identity(d),'source':d['source'],'identityStable':reliable,
             'month':d['month'],'asOf':d['asOf'],'scenario':scenario,'input':d,'rules':r,
             'lots':lots,'products':products,'alerts':alerts,'changes':changes,
             'borrows':result['borrows'],'pm':result['pmRecords'],'equipment':data['eqp'],
             'events':state['events'][:20], 'optimization':result.get('optimization',{}),
-            'frozenLots':len(frozen), 'runMs':result.get('runMs',0)}
+            'frozenLots':len(frozen), 'runMs':result.get('runMs',0),
+            'execution':execution,'outputLedger':ledger['rows']}
+    from production_validation import validate_plan
+    plan['validation']=validate_plan(d,plan,r)
+    return plan
 
 
 def trial(state, request, progress=None):
@@ -537,7 +662,9 @@ def trial(state, request, progress=None):
     def report(best, count, accepted):
         if progress:
             progress(project(state,request,prepared,make_json_safe(compact_result(best))) if accepted else None,count)
-    result = run(prepared[2], {'algorithm':'search','searchIterations':8}, report)
+    def verify(candidate):
+        project(state,request,prepared,make_json_safe(compact_result(candidate)))
+    result = run(prepared[2], {'algorithm':'search','searchIterations':32}, report,verify)
     return project(state,request,prepared,compact_result(result))
 
 
@@ -546,19 +673,28 @@ def adopt(config, plan, reason):
         state = read_state(config)
         if not str(reason).strip():
             raise ValueError('选用方案需要填写说明')
+        if state.get('active') and state['active']['id']==plan['id']:
+            return state
         if plan['contextHash'] != context_hash(state):
             raise ValueError('输入、规则或当前方案已变化，请重新试排后选用')
         if plan['scenario'] != 'actual':
             raise ValueError('扩产模拟不能选为实际资源计划；可保存为比较记录')
         if state['active'] and not plan['identityStable']:
             raise ValueError('跨快照关联标识待确认，不能自动继承或替换当前计划')
+        if state.get('factIssues') or state.get('receiptFailure'):
+            raise ValueError('生产事实尚未确认，不能选用')
+        if state.get('active') and state['active'].get('execution',{}).get('mode')=='live' and plan['execution']['mode']=='shadow':
+            raise ValueError('影子方案不能替换现场已选计划；请保存为比较记录')
+        from production_validation import validate_plan
+        from production_time import check_adoption
+        validate_plan(validate_snapshot(state['snapshot']),plan,rules(state['rules']))
+        check_adoption(plan,state['snapshot'],rules(state['rules']))
         plan = dict(plan, adoptedAt=stamp(),adoptReason=str(reason)[:1000])
         state['active'] = plan
         state['changePending'] = False
         state['revision'] += 1
         state['history'] = [dict(id=plan['id'],time=plan['adoptedAt'],source=plan['source'],scenario=plan['scenario'],reason=plan['adoptReason'])] + [item for item in state['history'] if item['id'] != plan['id']][:49]
-        _write(folder(config) / (plan['id'] + '.json'), plan)
-        write_state(config,state)
+        store.save(config,state,plan=plan,adopted=True)
         return state
 
 
@@ -566,13 +702,9 @@ def archive(config, plan):
     """Persist a candidate for review without changing the active production plan."""
     with LOCK:
         state = read_state(config)
-        path=folder(config) / (plan['id'] + '.json')
-        # A later "save comparison" must not erase an existing adoption record.
-        if not path.exists():
-            _write(path, plan)
         if not any(item['id']==plan['id'] for item in state['history']):
             state['history'] = [dict(id=plan['id'],time=stamp(),source=plan['source'],scenario=plan['scenario'],reason='候选比较记录，未选用')] + state['history'][:49]
-        write_state(config,state)
+        store.save(config,state,plan=plan)
         return state
 
 
@@ -580,4 +712,4 @@ def read_plan(config, plan_id):
     if not re.fullmatch(r'[a-f0-9]{32}', plan_id):
         raise ValueError('方案编号无效')
     with LOCK:
-        return json.loads((folder(config) / (plan_id + '.json')).read_text(encoding='utf-8'))
+        return store.read_plan(config,plan_id)

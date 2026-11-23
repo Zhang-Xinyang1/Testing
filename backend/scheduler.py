@@ -304,7 +304,7 @@ def simulate(data, options, policy=None):
         resource = {
             'kind': 'cp', 'id': e['id'], 'eqp': e['id'], 'type': e['type'],
             'index': index, 'initialCard': e.get('card'), 'card': e.get('card'),
-            'cardUpdatedAt': start,
+            'cardUpdatedAt': parse_date(data['productionSnapshot']['asOf']) if data.get('productionSnapshot') else start,
             'initialRecipe': e.get('recipe'), 'recipe': e.get('recipe'), 'free': start, 'pm': [], 'reserved': [],
             'tasks': [], 'borrows': [], 'intervals': [], 'wip': [], 'prodMs': 0,
             'setupMs': 0, 'setupCount': 0, 'borrowMs': 0, 'pmMs': 0,
@@ -368,10 +368,19 @@ def simulate(data, options, policy=None):
             blocks.extend(resource['pm'])
         duration = plan['hours'] * HOUR
         first = parse_date(plan['start']) if plan.get('start') else parse_date(plan['early'])
+        if data.get('productionRules'):
+            fixed_floor=data.get('execution',{}).get('requestedAt',start) if data.get('execution',{}).get('mode')=='live' else start
+            if plan.get('start') and first<fixed_floor:
+                raise TaskConstraintError('未开始 PM 的指定时间已过去，请更新执行状态：'+plan['eqp'],{'table':'pm'})
+            if not plan.get('start'):first=max(first,start)
+            if not plan.get('start') and policy and policy.get('pmPlacement')=='late':
+                latest=parse_date(plan['over'])+DAY-duration
+                choices=sorted({first,latest,*[a-duration for a,b in blocks]},reverse=True)
+                first=next((s for s in choices if s>=first and s<=latest and gap(blocks,s,duration)==s),first)
         slot = gap(blocks, first, duration)
         if slot + duration > parse_date(plan['over']) + DAY or (
                 plan.get('start') and slot != first):
-            raise ValueError('PM 窗口内无连续空档：' + plan['eqp'])
+            raise TaskConstraintError('PM 窗口内无连续空档或已逾期未执行：' + plan['eqp'],{'table':'pm'})
         record = {
             'id': plan['id'], 'eqp': plan['eqp'], 'early': plan['early'],
             'due': plan['due'], 'over': plan['over'], 'hours': plan['hours'],
@@ -613,6 +622,14 @@ def simulate(data, options, policy=None):
                 # CP.TIME is minutes per wafer; machine time scales with lot wafers.
                 process_ms = op[2] * MIN * lot['wafer']
                 duration = process_ms + setup
+                # Preserve the state required by the next fixed borrowing slot.
+                # Waiting is a valid decision; inventing a setup-only operation
+                # without an approved business rule is not.
+                upcoming=next((b for b in sorted(machine['borrows'],key=lambda b:b['start'])
+                               if b['start']>=now and b['req'].get('recipe')),None)
+                if upcoming and op[1]!=upcoming['req']['recipe']:
+                    next_time=min(next_time,upcoming['end'])
+                    continue
                 if adjustment and adjustment.get('fixedStart'):
                     fixed = parse_date(adjustment['fixedStart'])
                     requested = fixed - setup
@@ -1142,7 +1159,7 @@ def make_json_safe(value):
     return value
 
 
-def run(data, options=None, progress=None):
+def run(data, options=None, progress=None, candidate_validator=None):
     from optimizer import search_schedules
     from task_overrides import validate_overrides
 
@@ -1167,7 +1184,7 @@ def run(data, options=None, progress=None):
             or not math.isfinite(w) or not 0 <= w <= 24 for w in windows):
         raise ValueError('BAKE 等待窗口须为 0 至 24 小时，最多 8 个候选值')
     windows = list(dict.fromkeys(windows))
-    best = search_schedules(data, options, windows, simulate, progress)
+    best = search_schedules(data, options, windows, simulate, progress,candidate_validator)
     best['runMs'] = int((time.monotonic() - started) * 1000)
     best['runAt'] = datetime.now(timezone.utc).isoformat(
         timespec='milliseconds').replace('+00:00', 'Z')

@@ -19,6 +19,16 @@ POLICIES = (
 
 def objective(result):
     """Lexicographic max-min attainment, output, feasibility, span, setups."""
+    if result.get('data',{}).get('productionSnapshot'):
+        from production_ledger import result_ledger
+        ledger=result_ledger(result)
+        rates=tuple(sorted(round(p['rate'],12) for p in ledger['products'] if p['target']>0))
+        completed=[r['complete'] for r in ledger['rows'] if r['complete'] is not None]
+        return (-ledger['lateWafers'],-ledger['unservedDueWafers'],-ledger['weightedDelayMs'],rates,
+                sum(p['forecast'] for p in ledger['products']),
+                -sum(r['complete'] is None for r in ledger['rows']),
+                -(max(completed+[result['start']])-result['start']),
+                -sum(m['setupMs'] for m in result['machines']))
     rates = tuple(sorted(round(min(1, p['rate']), 12)
                          for p in result['productStats'] if p['mps'] > 0))
     completed = [lot['complete'] for lot in result['lots']
@@ -28,7 +38,8 @@ def objective(result):
     late = [(lot, max(0, lot['complete'] - lot['shipDue'])) for lot in result['lots']
             if lot.get('shipDue') is not None]
     due_score = (-sum(lot['wafer'] for lot, delay in late if delay > 0),
-                 -sum(delay * lot['wafer'] for lot, delay in late)) if delivery else ()
+                 -sum(lot['wafer'] for lot, delay in late if not math.isfinite(delay)),
+                 -sum(delay * lot['wafer'] for lot, delay in late if math.isfinite(delay))) if delivery else ()
     return due_score + (rates, result['metrics']['completedWafers'],
             -result['metrics']['unscheduledLots'], -span,
             -sum(m['setupMs'] for m in result['machines']))
@@ -36,7 +47,7 @@ def objective(result):
 
 def summary(result):
     score = objective(result)
-    return {
+    report = {
         'minProductRate': result['metrics']['minProductRate'],
         'meanProductRate': result['metrics']['meanProductRate'],
         'completedMonth': result['metrics']['completedMonth'],
@@ -45,12 +56,24 @@ def summary(result):
         'makespanHours': -score[-2] / 3600000,
         'setupMinutes': -score[-1] / 60000,
     }
+    if result.get('data',{}).get('productionSnapshot'):
+        from production_ledger import result_ledger
+        ledger=result_ledger(result);products=ledger['products']
+        report.update(minProductRate=min((p['rate'] for p in products),default=0),
+                      meanProductRate=sum(p['rate'] for p in products)/max(1,len(products)),
+                      completedWafers=sum(p['forecast'] for p in products),
+                      lateWafers=ledger['lateWafers'],unservedDueWafers=ledger['unservedDueWafers'])
+    return report
 
 
 def _neighbors(result, policy):
     """Raise weak products, or insert a near-late lot earlier in dispatch order."""
     base = policy or POLICIES[0]
-    weak = sorted((p for p in result['productStats'] if p['mps'] > 0 and p['rate'] < 1),
+    products=result['productStats']
+    if result.get('data',{}).get('productionSnapshot'):
+        from production_ledger import result_ledger
+        products=[dict(p,mps=p['target']) for p in result_ledger(result)['products']]
+    weak = sorted((p for p in products if p['mps'] > 0 and p['rate'] < 1),
                   key=lambda p: (p['rate'], p['ppn']))
     # Interleave neighborhoods so a small budget still tries both types.
     for product in weak[:4]:
@@ -61,7 +84,7 @@ def _neighbors(result, policy):
             yield 'product:' + product['ppn'], candidate
         late = sorted((lot for lot in result['lots']
                        if lot['prod'] == product['ppn']
-                       and lot['complete'] > result['monthEnd']
+                       and lot['complete'] > min(lot.get('shipDue') or result['monthEnd'],result['monthEnd'])
                        and math.isfinite(lot['complete'])),
                       key=lambda lot: (lot['complete'], lot['key']))
         for lot in late[:2]:
@@ -71,7 +94,7 @@ def _neighbors(result, policy):
             yield 'insert:' + lot['key'], candidate
 
 
-def search_schedules(data, options, windows, simulate, progress=None):
+def search_schedules(data, options, windows, simulate, progress=None, candidate_validator=None):
     algorithm = options.get('algorithm', 'search')
     if algorithm not in ('greedy', 'search'):
         raise ValueError('algorithm 必须为 greedy 或 search')
@@ -92,12 +115,13 @@ def search_schedules(data, options, windows, simulate, progress=None):
         identity = (window, None if policy is None else (
             policy['workWeight'], policy['tailWeight'],
             tuple(sorted(policy.get('productBias', {}).items())),
-            tuple(sorted(policy.get('lotBias', {}).items()))))
+            tuple(sorted(policy.get('lotBias', {}).items())),policy.get('pmPlacement','early')))
         if identity in seen:
             return False
         seen.add(identity)
         try:
             result = simulate(data, dict(options, bakeWindowHours=window), policy)
+            if candidate_validator:candidate_validator(result)
         except TaskConstraintError as error:
             rejected.append(str(error))
             return True
@@ -120,6 +144,9 @@ def search_schedules(data, options, windows, simulate, progress=None):
         for policy in POLICIES:
             for window in windows:
                 evaluate(window, policy, 'multi-start')
+        if data.get('productionSnapshot') and any(not p.get('start') for p in data.get('pm',[])):
+            for window in windows:
+                evaluate(window,dict(POLICIES[0],name='late-pm',pmPlacement='late'),'multi-start')
         evaluated = 0
         while best is not None and evaluated < iterations:
             progressed = False
@@ -140,7 +167,7 @@ def search_schedules(data, options, windows, simulate, progress=None):
     best['trials'] = trials
     best['optimization'] = {
         'algorithm': algorithm, 'version': 1,
-        'objective': ('shipping-deadline, ' if data.get('productionRules') else '') + 'leximin-attainment, wafers, scheduled-lots, makespan, setups',
+        'objective': ('late-or-unserved-wafers, unserved-due-wafers, weighted-delay, ' if data.get('productionRules') else '') + 'leximin-attainment, wafers, scheduled-lots, makespan, setups',
         'evaluations': len(trials), 'localSearchBudget': iterations,
         'selectedPolicy': best_policy['name'] if best_policy else 'legacy',
         'selectedPolicyParameters': copy.deepcopy(best_policy),

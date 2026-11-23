@@ -56,20 +56,20 @@ class DemoScenarioTests(unittest.TestCase):
                     result=update(config,'demo-event',{'event':event['key']})
                     self.assertEqual(result['active']['id'],plan['id'])
                     self.assertNotEqual(context_hash(before),context_hash(result))
-                    saved=(Path(tmp)/'production/state.json').read_bytes()
+                    saved=read_state(config)
                     with self.assertRaisesRegex(ValueError,'已应用'):
                         update(config,'demo-event',{'event':event['key']})
-                    self.assertEqual((Path(tmp)/'production/state.json').read_bytes(),saved)
+                    self.assertEqual(read_state(config),saved)
 
     def test_demo_operations_do_not_overwrite_mes(self):
         with tempfile.TemporaryDirectory() as tmp:
             config=Path(tmp)/'config.json'
             d=scenario_pack('full')['snapshot'];d['source']='mes'
             update(config,'snapshot',d)
-            original=(Path(tmp)/'production/state.json').read_bytes()
+            original=read_state(config)
             for action,body in [('demo',{'case':'basic'}),('demo-event',{'event':'release_hold'})]:
                 with self.assertRaises(ValueError):update(config,action,body)
-                self.assertEqual((Path(tmp)/'production/state.json').read_bytes(),original)
+                self.assertEqual(read_state(config),original)
 
     def test_saving_an_already_adopted_candidate_preserves_audit_reason(self):
         with tempfile.TemporaryDirectory() as tmp:

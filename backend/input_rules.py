@@ -173,7 +173,9 @@ def pm_events(data):
     for index, plan in enumerate(data.get('pm') or []):
         target = resolve_pm_target(data, plan)
         source = {key: plan[key] for key in ('eqp', 'early', 'due', 'over', 'hours', 'start') if key in plan}
-        source.update(id='PM-%02d' % (index + 1), eqp=identifier(plan['eqp']), targetKind=target['targetKind'])
+        source.update(id=str(plan.get('id') or 'PM-%02d' % (index + 1)), eqp=identifier(plan['eqp']), targetKind=target['targetKind'])
+        for key in ('sourceId','version','updatedAt','taskId'):
+            if key in plan:source[key]=plan[key]
         entries.append({**source, **target, 'sourceIds': [source['id']], 'sourcePlans': [source], 'merged': False})
         if plan.get('start'):
             start = parse_datetime(plan['start'])

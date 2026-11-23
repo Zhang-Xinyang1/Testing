@@ -5,6 +5,7 @@
   var state = null, job = null, loading = false, busy = false, failure = '', poll = null;
   var tab = 'trial', query = '', status = 'all', product = 'all', page = 1;
   var scene = 'actual', extras = {}, reason = '', draftRules = null, snapshotDraft = '';
+  var trialMode='shadow';
   var demoCatalog={scenarios:[],events:[]}, demoChoice='basic', presetChoice='arrival_known', validationReport=null;
   var excelDraft={}, mpsQuery='', chartPlanId=null;
   var sourceNames={demo:'内置演示',excel:'Excel',mes:'MES'};
@@ -100,6 +101,10 @@
       '<div class="note-card" data-current-plan="'+esc(plan?plan.id:'')+'">'+(plan?'当前选用方案：'+esc(plan.id.slice(0,12))+' · 看板、MPS、甘特与 Lot 查询共用此方案。':'尚未选用方案；试排候选需人工选用后才会更新所有结果页面。')+(plan?' <button class="btn ghost small" data-export="pm">导出选用 PM</button>':'')+(state&&state.changePending&&plan?' 输入已有变化，预测与任务仍属于上次选用方案，请重排并确认。':'')+'</div>'+
       (d?'<div class="note-card '+(d.source==='demo'?'prod-demo':'')+'">'+(d.source==='demo'?'全部为合成数据；各页面同步使用本演示来源。':d.source==='excel'?'Excel 来源：'+esc(d.sourceName||'已保存配置'):'当前使用已接收的 MES 快照；尚未配置 MES 主动拉取。')+' '+(!d.identityStable?'批次稳定标识待确认，跨快照冻结与替换计划受限。':'批次使用本数据源提供的稳定标识。')+'</div>':'')+
       (d&&(d.inputIssues||[]).length?'<div class="error-box"><b>试排前需补充</b><ul>'+d.inputIssues.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></div>':'')+
+      (state&&((state.factIssues||[]).length||(d&&d.factIssues||[]).length)?'<div class="error-box"><b>生产事实待核对 · 已保留原选方案，暂停新选用</b><ul>'+Array.from(new Set((state.factIssues||[]).concat(d&&d.factIssues||[]))).map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul></div>':'')+
+      (state&&state.receiptFailure?'<div class="error-box">最近接收失败：'+esc(state.receiptFailure.message)+'。完整数据重新接收前暂停试排与选用。</div>':'')+
+      (plan&&plan.execution?'<p class="note-card">'+(plan.execution.mode==='shadow'?'当前为影子演示方案，仅用于比较和展示，不用于现场执行。':'当前为现场计划；后续事实变化须重新核对与试排。')+'</p>':'')+
+      (state&&d&&d.source!=='demo'&&state.liveTimeIssue?'<p class="note-card">现场时效检查：'+esc(state.liveTimeIssue)+'。数据年龄 '+esc(state.dataAgeMinutes)+' 分钟；原方案仍可查看。</p>':'')+
       (d&&(d.inputNotes||[]).length?'<p class="config-hint">'+d.inputNotes.map(esc).join('；')+'</p>':'')+
       (failure||state&&state.inputLoadError?'<div class="error-box" role="alert">'+esc(failure||state.inputLoadError)+' <button class="btn ghost" data-open-view="inputs">检查 Excel 配置</button></div>':'')+
       (((!d&&(!state||!state.selectedSource||state.selectedSource==='demo'))||(d&&d.source==='demo'))&&['production','replanning'].includes(A.state.view)?demoHTML():'')+
@@ -183,23 +188,25 @@
   function jobHTML() {
     if(!job)return '<div class="note-card">尚无候选方案。试排结果不会自动替换已选方案。</div>';
     var names={running:'正在试排',completed:'试排完成',cancelled:'已取消',timed_out:'已达时限',failed:'试排失败'};
-    return '<div class="prod-job" role="status"><div><b>'+names[job.status]+'</b><p>'+esc(job.message)+'</p><small>已运行 '+job.elapsedSeconds+' 秒 / 上限 '+job.limitSeconds+' 秒 · '+job.evaluations+' 个候选</small></div>'+(job.status==='running'?btn('cancel','取消计算'):'')+'</div>';
+    var selected=job.plan&&state&&state.active&&job.plan.id===state.active.id;
+    return '<div class="prod-job" role="status"><div><b>'+names[job.status]+'</b><p>'+esc(selected?'此候选已选用，结果页面已同步。':job.message)+'</p><small>已运行 '+job.elapsedSeconds+' 秒 / 上限 '+job.limitSeconds+' 秒 · '+job.evaluations+' 个候选</small></div>'+(job.status==='running'?btn('cancel','取消计算'):'')+'</div>';
   }
   function comparison(plan, historical) {
     if(!plan)return '';
     var adopted=currentPlan()&&currentPlan().id===plan.id;
-    var stale=!historical&&!adopted&&(JSON.stringify(plan.input)!==JSON.stringify(state.snapshot)||JSON.stringify(plan.rules)!==JSON.stringify(state.rules)||(plan.baselineId||null)!==(currentPlan()&&currentPlan().id||null));
-    return '<div class="card"><div class="card-head"><h3>'+(historical?'历史记录':'候选方案')+' · '+(plan.scenario==='expansion'?'扩产假设':'实际资源')+'</h3></div><div class="card-body"><p>数据时点：'+fmt(plan.asOf)+'。冻结 '+plan.frozenLots+' 个 Lot。交期优先，其次改善产品缺口；未证明全局最优。</p>'+table(['PPN','实际完成','方案预计','实际 − 原计划','新预测 − 原预测','预测 − 月目标'],plan.products.map(function(p){return '<tr>'+[p.ppn,p.actual,p.forecast,delta(p.actualPlanDelta),delta(p.forecastDelta),delta(p.targetDelta)].map(cell).join('')+'</tr>';}))+
+    var expired=plan.execution&&plan.execution.mode==='live'&&Date.now()>=plan.execution.validUntil;
+    var stale=!historical&&!adopted&&(expired||(state.factIssues||[]).length||state.receiptFailure||JSON.stringify(plan.input)!==JSON.stringify(state.snapshot)||JSON.stringify(plan.rules)!==JSON.stringify(state.rules)||(plan.baselineId||null)!==(currentPlan()&&currentPlan().id||null));
+    return '<div class="card"><div class="card-head"><h3>'+(historical?'历史记录':'候选方案')+' · '+(plan.scenario==='expansion'?'扩产假设':'实际资源')+'</h3></div><div class="card-body">'+(plan.execution?'<p class="note-card">'+(plan.execution.mode==='shadow'?'影子试排：按历史数据时点模拟，不用于现场执行。':'现场试排：可执行起点 '+fmt(plan.execution.start)+'，最晚选用 '+fmt(plan.execution.validUntil))+' · '+(plan.validation&&plan.validation.passed?'独立约束校验通过':'尚未通过独立校验')+'</p>':'')+'<p>数据时点：'+fmt(plan.asOf)+'。冻结 '+plan.frozenLots+' 个 Lot。交期优先，其次改善产品缺口；未证明全局最优。</p>'+table(['PPN','实际完成','方案预计','实际 − 原计划','新预测 − 原预测','预测 − 月目标'],plan.products.map(function(p){return '<tr>'+[p.ppn,p.actual,p.forecast,delta(p.actualPlanDelta),delta(p.forecastDelta),delta(p.targetDelta)].map(cell).join('')+'</tr>';}))+
       '<details class="config-details"><summary>任务影响 · '+plan.changes.length+' 个 Lot</summary>'+(!plan.identityStable?'<p class="workflow-error">批次稳定标识待确认，无法可靠逐 Lot 对比。</p>':'')+
       table(['Lot','变化','原完工','新完工'],plan.changes.map(function(c){return '<tr>'+[c.lotId,c.kind,fmt(c.before),fmt(c.after)].map(cell).join('')+'</tr>';}))+
       '</details><h3>借机开始时 Recipe 检查</h3>'+table(['机台','借机开始','要求 Recipe','当时 Recipe','检查'],plan.borrows.map(function(b){return '<tr>'+[b.eqp,fmt(b.start),b.requiredRecipe||b.req.recipe,b.recipeAtStart||'未取得',b.recipeMatched?'匹配':b.reason||'未匹配'].map(cell).join('')+'</tr>';}))+
       '<details class="config-details"><summary>PM 原始维护与组合停机 · '+(plan.pm||[]).length+' 段</summary>'+table(['原始维护对象','组合 EQP','组合 Prober','停机开始','停机结束','合并说明'],(plan.pm||[]).map(function(p){return '<tr>'+[(p.sourcePlans||[]).map(function(s){return s.eqp+' ('+s.targetKind+')';}).join('、'),(p.affectedEqps||[]).join('、'),(p.affectedProbers||[]).join('、'),fmt(p.start),fmt(p.end),p.merged?'重叠停机合并，各项维护保留':'独立停机'].map(cell).join('')+'</tr>';}))+'</details>'+
       '<details class="config-details"><summary>查看候选任务时间与资源</summary>'+table(['Lot','工序','资源','占用开始','任务开始','Lot 放行','资源释放'],plan.lots.flatMap(function(l){return l.tasks.map(function(t){return '<tr>'+[l.lotId,t.step,t.machine||t.chamber||'等待',fmt(t.blockStart||t.start),fmt(t.start),fmt(t.end),fmt(t.resourceEnd||t.end)].map(cell).join('')+'</tr>'; }); }))+'</details>'+
-      (historical?'<p class="note-card">历史只读记录，不会覆盖当前方案。</p>':job&&job.status==='running'?'<p class="note-card">仍在计算，当前候选仅供查看；完成或取消后可保存和选用。</p>':adopted?'<p class="note-card">此方案已经选用，当前未接入 MES 下发。</p>':btn('archive','保存比较记录')+(stale?'<p class="workflow-error">数据、规则或已选方案已变化，此候选仅供查看，请重新试排。</p>':plan.scenario==='actual'?'<div class="prod-toolbar">'+input('prod-adopt-reason','选用说明',adoptReason())+btn('adopt','选用此方案','primary')+'</div><p class="config-hint">演示已预填说明，仍由你点击选用；现场方案需填写实际原因。选用保存至本程序，当前未接入 MES 下发。</p>':'<p class="note-card">这是扩产假设结果，不能选为实际资源计划。</p>'))+'</div></div>';
+      (historical?'<p class="note-card">历史只读记录，不会覆盖当前方案。</p>':job&&job.status==='running'?'<p class="note-card">仍在计算，当前候选仅供查看；完成或取消后可保存和选用。</p>':adopted?'<p class="note-card">此方案已经选用，当前未接入 MES 下发。</p>':btn('archive','保存比较记录')+(stale?'<p class="workflow-error">数据、规则、已选方案或候选时效已变化，此候选仅供查看，请重新试排。</p>':plan.scenario==='actual'?'<div class="prod-toolbar">'+input('prod-adopt-reason','选用说明',adoptReason())+btn('adopt',plan.execution&&plan.execution.mode==='shadow'?'选用影子演示方案':'选用现场方案','primary')+'</div><p class="config-hint">演示已预填说明，仍由你点击选用；现场方案需填写实际原因。选用保存至本程序，当前未接入 MES 下发。</p>':'<p class="note-card">这是扩产假设结果，不能选为实际资源计划。</p>'))+'</div></div>';
   }
   function trialHTML() {
     var d=state.snapshot, types=Array.from(new Set(d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return e.type;})));
-    return '<div class="card"><div class="card-body"><div class="prod-toolbar"><label class="config-field">资源场景<select id="prod-scenario" class="select"><option value="actual"'+(scene==='actual'?' selected':'')+'>实际资源</option><option value="expansion"'+(scene==='expansion'?' selected':'')+'>假设扩产</option></select></label>'+types.map(function(t){return input('prod-extra-'+t,'新增 '+esc(t)+' 台数（仅扩产）',extras[t]||0,'number','min="0" max="20" data-prod-extra="'+esc(t)+'"');}).join('')+btn('trial','开始试排','primary')+'</div><p>重排时点：'+fmt(d.asOf)+'；计划月份：'+esc(d.month)+'；冻结窗口：'+state.rules.freezeHours+' 小时。</p><p class="config-hint">当前工序的在制占用始终保留。冻结窗口覆盖的计划将按整 Lot 剩余路线保留，并连带保留同一 BAKE 批次成员，避免拆散已有批次。冻结含过去任务但缺少执行事实时，会要求更新快照。</p></div></div>'+jobHTML()+comparison(job&&job.plan);
+    return '<div class="card"><div class="card-body"><div class="prod-toolbar"><label class="config-field">试排用途<select id="prod-trial-mode" class="select"><option value="shadow"'+(trialMode==='shadow'?' selected':'')+'>影子演示（历史数据）</option><option value="live"'+(trialMode==='live'?' selected':'')+'>现场计划（检查当前时效）</option></select></label><label class="config-field">资源场景<select id="prod-scenario" class="select"><option value="actual"'+(scene==='actual'?' selected':'')+'>实际资源</option><option value="expansion"'+(scene==='expansion'?' selected':'')+'>假设扩产</option></select></label>'+types.map(function(t){return input('prod-extra-'+t,'新增 '+esc(t)+' 台数（仅扩产）',extras[t]||0,'number','min="0" max="20" data-prod-extra="'+esc(t)+'"');}).join('')+btn('trial','开始试排','primary')+'</div><p>重排时点：'+fmt(d.asOf)+'；计划月份：'+esc(d.month)+'；冻结窗口：'+state.rules.freezeHours+' 小时。</p><p class="config-hint">当前工序的在制占用始终保留。冻结窗口覆盖的计划将按整 Lot 剩余路线保留，并连带保留同一 BAKE 批次成员，避免拆散已有批次。冻结含过去任务但缺少执行事实时，会要求更新快照。</p></div></div>'+jobHTML()+comparison(job&&job.plan);
   }
   function eventsHTML() {
     var d=state.snapshot;
@@ -213,7 +220,7 @@
       input('prod-rule-recipeChangeMinutes','换 Recipe（分钟）',r.recipeChangeMinutes,'number','min="0" max="1440"')+
       input('prod-rule-maxRuntimeSeconds','计算上限（秒，最多 1800）',r.maxRuntimeSeconds,'number','min="1" max="1800"')+
       input('prod-rule-freezeHours','冻结范围（小时，待产线确认）',r.freezeHours,'number','min="0" max="744"')+
-      input('prod-rule-checkTime','每日检查已接收数据的时刻',r.checkTime,'time')+
+      input('prod-rule-checkTime','每日检查已接收数据的时刻',r.checkTime,'time')+input('prod-rule-planningLeadMinutes','现场计划准备时间（分钟）',r.planningLeadMinutes==null?35:r.planningLeadMinutes,'number','min="0" max="1440"')+input('prod-rule-snapshotMaxAgeMinutes','现场数据最大年龄（分钟）',r.snapshotMaxAgeMinutes==null?60:r.snapshotMaxAgeMinutes,'number','min="1" max="1440"')+
       input('prod-rule-delayAlertHours','延期预警阈值（小时）',r.delayAlertHours,'number','min="0" max="744"')+
       input('prod-rule-shortageAlertWafers','产品缺口预警阈值（wafer）',r.shortageAlertWafers,'number','min="1"')+'</div><p>换针卡固定 5 分钟，切换同时发生时相加。静置固定 336 小时，不阻塞后续。月度完成按最后一道加工结束。</p>'+btn('rules','保存规则','primary')+'<p class="config-hint">保存规则后需要重新试排。定时检查由服务端执行，只提示变化，不自动运行排产。</p><p>最近检查：'+(state.lastCheck?fmt(state.lastCheck.time)+' · '+esc(state.lastCheck.message):'尚未到检查时刻')+'</p></div></div>'+
       '<div class="card"><div class="card-head"><h3>MES 数据接入</h3><span class="pill amber">字段约定 / 待联调</span></div><div class="card-body"><p>接收完整快照，实际调用方式可后续替换。需要需求、Lot 状态、资源、路线、Recipe、PM、借机及外部占用。稳定标识未确认时标记 identityStable=false。</p><details class="config-details"><summary>粘贴快照进行接收验证</summary><p>与演示数据使用同一校验规则。接收成功会更新工作台数据；不会改写 Excel 配置。请在 JSON 中明确 source=mes 或 demo。</p><textarea id="prod-snapshot" class="input prod-json" aria-label="MES 快照 JSON">'+esc(snapshotDraft)+'</textarea>'+btn('load-json','填入当前快照示例')+btn('snapshot','校验并接收快照','primary')+'</details></div></div>';
@@ -272,6 +279,7 @@
     if(event.target.id==='prod-state'){status=event.target.value;page=1;render();}
     if(event.target.id==='prod-product'){product=event.target.value;page=1;render();}
     if(event.target.id==='prod-scenario')scene=event.target.value;
+    if(event.target.id==='prod-trial-mode')trialMode=event.target.value;
   });
   document.addEventListener('click',async function(event){
     var lot=event.target.closest('[data-prod-lot]'), p=event.target.closest('[data-prod-product]'), t=event.target.closest('[data-prod-tab]');
@@ -295,7 +303,7 @@
         A.closeDrawer();
         state=await request('/source',{source:action.slice(7)});job=null;draftRules=null;reason='';excelDraft={};chartPlanId=null;
         if(action==='source-excel'&&!state.snapshot)state=await request('/excel',{});
-        tab=action==='source-mes'?'settings':'trial';
+        tab=action==='source-mes'?'settings':'trial';trialMode=action==='source-mes'?'live':'shadow';
         A.navigate(action==='source-mes'?'replanning':'production');
       }
       if(action==='excel'){
@@ -303,7 +311,7 @@
         state=await request('/excel',excelDraft);excelDraft={};job=null;chartPlanId=null;
       }
       if(action==='demo'){
-        state=await request('/demo',{case:demoChoice});job=null;draftRules=null;reason='';scene='actual';tab='trial';snapshotDraft='';validationReport=null;
+        state=await request('/demo',{case:demoChoice});job=null;draftRules=null;reason='';scene='actual';trialMode='shadow';tab='trial';snapshotDraft='';validationReport=null;
         extras=Object.assign({},state.snapshot.demoCase.suggestedExpansion||{});query='';product='all';status='all';page=1;
       }
       if(action==='demo-check')validationReport=await request('/demo-check',{});
@@ -314,7 +322,7 @@
         if(Object.keys(excelDraft).length)throw new Error('Excel 补充信息尚未接收，请先点击“接收已保存 Excel 与补充信息”');
         if(A.hasConfigurationChanges&&A.hasConfigurationChanges())throw new Error('Excel 配置有未保存修改，请先保存或放弃草稿');
         if(draftRules)throw new Error('请先保存生产规则，再开始试排');
-        job=(await request('/trial',{scenario:scene,extraMachines:extras})).job;schedulePoll();
+        job=(await request('/trial',{scenario:scene,extraMachines:extras,mode:trialMode})).job;schedulePoll();
       }
       if(action==='cancel'){job=(await request('/cancel',{id:job.id})).job;schedulePoll();}
       if(action==='adopt'){
@@ -328,7 +336,7 @@
         var value=A.$('#prod-event-time').value;
         state=await request('/event',{kind:A.$('#prod-event-kind').value,uid:A.$('#prod-event-lot').value,eqp:A.$('#prod-event-eqp').value,time:value?S.isoDate(S.parseDate(value)):null,reason:A.$('#prod-event-reason').value});
       }
-    } catch(error){failure=error.message;}
+    } catch(error){failure=error.message;if(action==='snapshot'){try{state=await request('');}catch(ignored){}}}
     finally{busy=false;render();}
   });
 })();

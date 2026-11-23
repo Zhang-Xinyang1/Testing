@@ -63,7 +63,7 @@ class UnifiedProductionTests(unittest.TestCase):
         self.assertIsNone(snapshot['lots'][6]['availableAt'])
         self.assertEqual(snapshot['inputIssues'], [])
         s = self.workspace();s['snapshot'] = snapshot
-        p = trial(s,{})
+        p = trial(s,{'mode':'shadow'})
         lots={l['uid']:l for l in p['lots']}
         self.assertFalse(lots[snapshot['lots'][5]['uid']]['tasks'])
         self.assertFalse(lots[snapshot['lots'][6]['uid']]['tasks'])
@@ -74,7 +74,7 @@ class UnifiedProductionTests(unittest.TestCase):
         snapshot=excel_snapshot(build_payload(config=c))
         self.assertTrue(all(l['plannedLot'] and not l['availableAt'] for l in snapshot['lots']))
         s=self.workspace();s['snapshot']=snapshot
-        self.assertEqual(sum(p['forecast'] for p in trial(s,{})['products']),0)
+        self.assertEqual(sum(p['forecast'] for p in trial(s,{'mode':'shadow'})['products']),0)
 
     def test_blank_configured_lot_sheet_is_not_replaced_with_generated_stock(self):
         sheets=read_workbook(ROOT/load_config()['dataSource']['path'])
@@ -91,7 +91,7 @@ class UnifiedProductionTests(unittest.TestCase):
         self.assertEqual(snapshot['lots'][1]['current']['eqp'],'CP-A-01')
         self.assertTrue(snapshot['identityStable'])
         s=self.workspace();s['snapshot']=snapshot
-        self.assertEqual(sum(p['forecast'] for p in trial(s,{})['products']),220)
+        self.assertEqual(sum(p['forecast'] for p in trial(s,{'mode':'shadow'})['products']),220)
 
     def test_missing_borrow_recipe_and_current_occupancy_block_trial(self):
         for table,key in [('borrow','recipe'),('productionFacts','currentStep')]:
@@ -100,10 +100,10 @@ class UnifiedProductionTests(unittest.TestCase):
             snapshot=excel_snapshot(d)
             self.assertTrue(snapshot['inputIssues'])
             s=self.workspace();s['snapshot']=snapshot
-            with self.assertRaisesRegex(ValueError,'待补充'):trial(s,{})
+            with self.assertRaisesRegex(ValueError,'待补充'):trial(s,{'mode':'shadow'})
 
     def test_chart_preserves_uid_batches_setup_wip_and_combined_pm(self):
-        p=trial(self.workspace(),{});c=chart_projection(p)
+        p=trial(self.workspace(),{'mode':'shadow'});c=chart_projection(p)
         self.assertEqual(c['planId'],p['id'])
         self.assertEqual(len(c['cpTasks']),16)
         self.assertEqual(sum(len(b['lotKeys']) for b in c['batches']),8)
@@ -118,8 +118,8 @@ class UnifiedProductionTests(unittest.TestCase):
         self.assertEqual(cp,{(l['uid'],t['step'],t['start']) for l in p['lots'] for t in l['tasks'] if t.get('machine')})
 
     def test_frozen_tasks_remain_in_chart_without_recomputing_or_duplicating_them(self):
-        s=self.workspace();s['active']=trial(s,{});s['rules']['freezeHours']=1
-        p=trial(s,{});before=copy.deepcopy(p);c=chart_projection(p)
+        s=self.workspace();s['active']=trial(s,{'mode':'shadow'});s['rules']['freezeHours']=1
+        p=trial(s,{'mode':'shadow'});before=copy.deepcopy(p);c=chart_projection(p)
         self.assertGreater(p['frozenLots'],0)
         self.assertEqual(p,before)
         self.assertEqual(len(c['cpTasks']),sum(bool(t.get('machine')) for l in p['lots'] for t in l['tasks']))
@@ -127,7 +127,7 @@ class UnifiedProductionTests(unittest.TestCase):
     def test_sources_restore_selected_plans_and_same_excel_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg=Path(tmp)/'config.json'
-            s=update(cfg,'excel',self.snapshot);p=trial(s,{})
+            s=update(cfg,'excel',self.snapshot);p=trial(s,{'mode':'shadow'})
             chosen=adopt(cfg,p,'Excel 测试选用')
             self.assertEqual(update(cfg,'excel',self.snapshot),chosen)
             update(cfg,'source',{'source':'demo'})
@@ -143,12 +143,12 @@ class UnifiedProductionTests(unittest.TestCase):
     def test_arrival_change_updates_all_results_only_after_adoption(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg=Path(tmp)/'config.json';s=update(cfg,'excel',self.snapshot)
-            p=trial(s,{});adopt(cfg,p,'基线')
+            p=trial(s,{'mode':'shadow'});adopt(cfg,p,'基线')
             changed=copy.deepcopy(self.snapshot);changed['source']='demo'
             changed,_=demo_event(changed,'arrival_known');changed['source']='excel'
             s=update(cfg,'excel',changed)
             self.assertEqual(s['active']['id'],p['id'])
-            candidate=trial(s,{})
+            candidate=trial(s,{'mode':'shadow'})
             self.assertEqual(sum(p['forecast'] for p in candidate['products']),245)
             self.assertEqual(sum(p['forecastDelta'] for p in candidate['products']),25)
             self.assertEqual(read_state(cfg)['active']['id'],p['id'])
@@ -169,7 +169,7 @@ class UnifiedProductionTests(unittest.TestCase):
                 s=request('/api/production')
                 self.assertEqual(s['snapshot']['source'],'excel');self.assertIsNone(s['active'])
                 self.assertIsNone(request('/api/production/job')['job'])
-                p=trial(read_state(cfg),{});adopt(cfg,p,'接口测试')
+                p=trial(read_state(cfg),{'mode':'shadow'});adopt(cfg,p,'接口测试')
                 state=request('/api/production')
                 self.assertEqual(state['active']['id'],state['chart']['planId'])
                 result=request('/api/config',{'scheduling':load_config()['scheduling']})

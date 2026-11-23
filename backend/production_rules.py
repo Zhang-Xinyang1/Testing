@@ -3,7 +3,8 @@ import math
 
 DEFAULTS = {'recipeChangeMinutes': 30, 'cardChangeMinutes': 5,
             'restHours': 336, 'maxRuntimeSeconds': 1800, 'freezeHours': 0,
-            'checkTime': '08:00', 'delayAlertHours': 0, 'shortageAlertWafers': 1}
+            'checkTime': '08:00', 'delayAlertHours': 0, 'shortageAlertWafers': 1,
+            'planningLeadMinutes':35, 'snapshotMaxAgeMinutes':60}
 
 
 def rules(values=None):
@@ -15,7 +16,8 @@ def rules(values=None):
     bounds = {'recipeChangeMinutes': (0, 1440), 'cardChangeMinutes': (5, 5),
               'restHours': (336, 336), 'maxRuntimeSeconds': (1, 1800),
               'freezeHours': (0, 744), 'delayAlertHours': (0, 744),
-              'shortageAlertWafers': (1, 100000000)}
+              'shortageAlertWafers': (1, 100000000),
+              'planningLeadMinutes': (0,1440), 'snapshotMaxAgeMinutes': (1,1440)}
     for key, (low, high) in bounds.items():
         value = result[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:

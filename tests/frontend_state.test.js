@@ -771,6 +771,32 @@ test('empty production workspace reads only, exposes MES reception and uses its 
   assert.equal(env.pending.length,0);
 });
 
+test('production fact issues and failed receipts remain explicit while the selected plan is retained', async()=>{
+  const env=productionEnvironment({source:'mes',month:'2026-11',asOf:'2026-11-23T08:00:00+08:00',lots:[],demands:[],equipment:[]});
+  env.workspace.factIssues=['在制 L1 缺少释放事实'];
+  env.workspace.receiptFailure={message:'分页未完成'};
+  await env.action('refresh');
+  assert.match(env.nodes['#view-production'].innerHTML,/在制 L1 缺少释放事实/);
+  assert.match(env.nodes['#view-production'].innerHTML,/分页未完成/);
+  assert.match(env.nodes['#view-production'].innerHTML,/暂停新选用/);
+});
+
+test('trial mode is explicit and historical trials send shadow mode', async()=>{
+  const env=productionEnvironment({source:'excel',month:'2026-11',asOf:'2026-11-13T08:00:00+08:00',lots:[],demands:[],equipment:[]});
+  await env.action('refresh');env.app.startProductionTrial();
+  assert.match(env.nodes['#view-replanning'].innerHTML,/影子演示（历史数据）/);
+  await env.action('trial');
+  assert.equal(JSON.parse(env.requests.find(r=>r.url.endsWith('/trial')).options.body).mode,'shadow');
+});
+
+test('shadow selected plans are labeled on every unified view', async()=>{
+  const env=productionEnvironment({source:'excel',month:'2026-11',asOf:'2026-11-13T08:00:00+08:00',lots:[],demands:[],equipment:[]});
+  env.workspace.active={id:'SHADOW',input:env.workspace.snapshot,products:[],alerts:[],execution:{mode:'shadow'}};
+  await env.action('refresh');
+  assert.match(env.nodes['#view-production'].innerHTML,/影子演示方案/);
+  assert.match(env.nodes['#view-production'].innerHTML,/不用于现场执行/);
+});
+
 test('production rule draft survives navigation and prevents scheduling with unsaved values', async()=>{
   const env=productionEnvironment({source:'demo',month:'2026-11',asOf:'2026-11-12T08:00:00+08:00',lots:[],demands:[],equipment:[]});
   await env.action('refresh');
