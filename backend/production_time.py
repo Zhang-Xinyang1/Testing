@@ -28,6 +28,8 @@ def live_facts(snapshot, settings, now):
 
 def execution_context(snapshot, settings, request):
     mode=request.get('mode','shadow' if snapshot['source']=='demo' else 'live')
+    if mode == 'live' and snapshot.get('wipPilot') and snapshot['source'] == 'demo':
+        raise ValueError('模拟 WIP 来料仅可使用影子试排')
     if mode not in ('live','shadow'):
         raise ValueError('试排模式须为 live 或 shadow')
     asof=milliseconds(snapshot['asOf']);now=now_ms()

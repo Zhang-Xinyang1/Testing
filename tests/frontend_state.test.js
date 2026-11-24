@@ -868,6 +868,76 @@ test('input self-check distinguishes expected rejection from a test failure',asy
   assert.match(html,/不保存样例，不启动排产/);
 });
 
+function wipEnvironment() {
+  const snapshot={source:'demo',month:'2026-11',snapshotId:'BASIC-1',asOf:'2026-11-20T08:00:00+08:00',
+    demoCase:{key:'basic',title:'客户主线'},lots:[],demands:[],equipment:[]};
+  const env=productionEnvironment(snapshot);
+  const openEvents=()=>env.listeners.click({target:{closest:s=>s==='[data-prod-tab]'?{dataset:{prodTab:'events'}}:null}});
+  const api=env.context.fetch, requests=[];
+  env.context.fetch=async(url,options)=>{
+    if (!url.includes('/wip-')) return api(url,options);
+    const body=JSON.parse(options.body);
+    requests.push({url,body});
+    if(url.endsWith('/wip-apply')){
+      env.workspace.snapshot={...snapshot,snapshotId:'BASIC-2'};
+      return {ok:true,json:async()=>env.workspace};
+    }
+    const rows=body.records.map(row=>{const observed=row.kind==='ETA';return {...row,status:observed?'observed':'applied',reason:observed?'预计到达只作参考':'已确认首道工序可用时间'};});
+    const observed=rows.filter(row=>row.status==='observed').length;
+    return {ok:true,json:async()=>({contextHash:'hashed',report:{accepted:true,applied:rows.length-observed,observed,errors:[],rows}})};
+  };
+  return {env,requests,openEvents};
+}
+
+test('WIP preview uses the linked baseline and leaves scheduling to the planner after explicit apply',async()=>{
+  const {env,requests,openEvents}=wipEnvironment();
+  await env.action('refresh');env.app.startProductionTrial();await openEvents();
+  assert.match(env.nodes['#view-replanning'].innerHTML,/预览 WIP 来料/);
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/应用到演示快照/);
+  await env.action('wip-preview');
+  const feed=requests[0].body;
+  assert.equal(feed.snapshotId,'BASIC-1');
+  assert.deepEqual(feed.records.map(r=>[r.uid,r.step,r.kind,r.wafer]),[
+    ['DEMO-LOT-003','CP1','CONFIRMED',25],['DEMO-LOT-003','BAKE','ETA',25],['DEMO-LOT-001','CP1','ETA',25]]);
+  assert.equal(Date.parse(feed.records[0].at)-Date.parse(feed.asOf),24*3600000);
+  assert.match(env.nodes['#view-replanning'].innerHTML,/可应用 1 条，观察 2 条/);
+  const selectExample=value=>env.listeners.change({target:{id:'prod-wip-example',value}});
+  selectExample('ETA');
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/应用到演示快照/);
+  await env.action('wip-preview');
+  assert.deepEqual(requests[1].body.records,feed.records.map((row,i)=>i?row:{...row,kind:'ETA'}));
+  assert.match(env.nodes['#view-replanning'].innerHTML,/可应用 0 条，观察 3 条/);
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/应用到演示快照/);
+  selectExample('CONFIRMED');
+  await env.action('wip-preview');
+  assert.deepEqual(requests[2].body,feed);
+  await env.action('wip-apply');
+  assert.deepEqual(requests[3].body,{contextHash:'hashed',feed});
+  assert.match(env.nodes['#view-replanning'].innerHTML,/影子演示（历史数据）/);
+  assert.equal(env.requests.some(r=>r.url.endsWith('/trial')),false);
+});
+
+test('edited, rejected or superseded WIP previews cannot apply',async()=>{
+  const {env,requests,openEvents}=wipEnvironment();
+  await env.action('refresh');env.app.startProductionTrial();await openEvents();
+  await env.action('wip-preview');
+  const draft=JSON.stringify(requests[0].body);
+  env.listeners.input({target:{id:'prod-wip-feed',value:draft,dataset:{}}});
+  await env.action('wip-apply');
+  assert.equal(requests.length,1);
+  await env.action('wip-preview');
+  env.workspace.snapshot.snapshotId='NEW-BASE';
+  await env.action('wip-apply');
+  assert.equal(requests.length,2);
+  env.context.fetch=async()=>({ok:true,json:async()=>({contextHash:'x',report:{
+    accepted:false,rows:[],errors:['UID 不在基线中'],applied:0,observed:0}})});
+  await env.action('wip-preview');
+  assert.match(env.nodes['#view-replanning'].innerHTML,/UID 不在基线中/);
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/应用到演示快照/);
+  env.workspace.snapshot.source='mes';env.app.renderProduction();
+  assert.doesNotMatch(env.nodes['#view-replanning'].innerHTML,/WIP 来料预演/);
+});
+
 test('unified MPS, Gantt and Lot results use the selected plan through pending input changes', async()=>{
   const snapshot={source:'excel',month:'2026-11',asOf:'2026-11-13T08:00:00+08:00',identityStable:true,demands:[{ppn:'P',wafer:100}],equipment:[{id:'M1',type:'CP-A'}],lots:[{uid:'U1',lotId:'SAME',ppn:'P',wafer:25,state:'READY',location:'原位置'}]};
   const env=productionEnvironment(snapshot),S=env.app.SCHED;

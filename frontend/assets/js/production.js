@@ -6,6 +6,8 @@
   var tab = 'trial', query = '', status = 'all', product = 'all', page = 1;
   var scene = 'actual', extras = {}, reason = '', draftRules = null, snapshotDraft = '';
   var trialMode='shadow';
+  var wipContext = null, wipDraft = null, wipPreview = null;
+  var wipExample = 'CONFIRMED';
   var demoCatalog={scenarios:[],events:[]}, demoChoice='basic', presetChoice='arrival_known', validationReport=null;
   var excelDraft={}, mpsQuery='', chartPlanId=null;
   var sourceNames={demo:'内置演示',excel:'Excel',mes:'MES'};
@@ -208,9 +210,63 @@
     var d=state.snapshot, types=Array.from(new Set(d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return e.type;})));
     return '<div class="card"><div class="card-body"><div class="prod-toolbar"><label class="config-field">试排用途<select id="prod-trial-mode" class="select"><option value="shadow"'+(trialMode==='shadow'?' selected':'')+'>影子演示（历史数据）</option><option value="live"'+(trialMode==='live'?' selected':'')+'>现场计划（检查当前时效）</option></select></label><label class="config-field">资源场景<select id="prod-scenario" class="select"><option value="actual"'+(scene==='actual'?' selected':'')+'>实际资源</option><option value="expansion"'+(scene==='expansion'?' selected':'')+'>假设扩产</option></select></label>'+types.map(function(t){return input('prod-extra-'+t,'新增 '+esc(t)+' 台数（仅扩产）',extras[t]||0,'number','min="0" max="20" data-prod-extra="'+esc(t)+'"');}).join('')+btn('trial','开始试排','primary')+'</div><p>重排时点：'+fmt(d.asOf)+'；计划月份：'+esc(d.month)+'；冻结窗口：'+state.rules.freezeHours+' 小时。</p><p class="config-hint">当前工序的在制占用始终保留。冻结窗口覆盖的计划将按整 Lot 剩余路线保留，并连带保留同一 BAKE 批次成员，避免拆散已有批次。冻结含过去任务但缺少执行事实时，会要求更新快照。</p></div></div>'+jobHTML()+comparison(job&&job.plan);
   }
+  function currentWipContext() {
+    var d = state && state.snapshot;
+    if (!d || d.source !== 'demo' || !d.demoCase || d.demoCase.key !== 'basic') return null;
+    return JSON.stringify([d.snapshotId, d.asOf, state.revision, state._storeVersion, state.active && state.active.id]);
+  }
+  function resetWipDraft() {
+    wipContext = null;
+    wipDraft = null;
+    wipPreview = null;
+    wipExample = 'CONFIRMED';
+  }
+  function sampleWipFeed(d, firstArrivalKind) {
+    var start = S.parseDate(d.asOf);
+    function row(uid, step, kind, hours) {
+      return {uid:uid, step:step, kind:kind, at:S.isoDate(start + hours * 3600000), wafer:25};
+    }
+    return {snapshotId:d.snapshotId, asOf:d.asOf, records:[
+      row('DEMO-LOT-003', 'CP1', firstArrivalKind, 24),
+      row('DEMO-LOT-003', 'BAKE', 'ETA', 30),
+      row('DEMO-LOT-001', 'CP1', 'ETA', 3)
+    ]};
+  }
+  function wipReportHTML() {
+    if (!wipPreview) return '';
+    var report = wipPreview.result.report;
+    var statusLabels = {applied:'可应用', observed:'仅观察', unchanged:'已一致', blocked:'整批暂停', error:'需修正'};
+    var rows = report.rows.map(function(row, index) {
+      var source = wipPreview.feed.records[index] || {};
+      return '<tr>' + [row.uid, row.step, row.kind, fmt(source.at), source.wafer,
+        statusLabels[row.status] || row.status, row.reason].map(cell).join('') + '</tr>';
+    });
+    var errors = report.errors.length ? '<ul class="error-box">' + report.errors.map(function(message) {
+      return '<li>' + esc(message) + '</li>';
+    }).join('') + '</ul>' : '';
+    var canApply = report.accepted && report.applied > 0;
+    return '<p>可应用 ' + esc(report.applied) + ' 条，观察 ' + esc(report.observed) + ' 条。</p>' +
+      table(['Lot UID','工序','来料类型','可用或预计时刻','wafer','处理','原因'], rows) +
+      errors + (canApply ? btn('wip-apply', '应用到演示快照', 'primary') : '');
+  }
+  function wipPanel() {
+    if (!wipContext) return '';
+    if (wipDraft === null) wipDraft = JSON.stringify(sampleWipFeed(state.snapshot, wipExample), null, 2);
+    return '<div class="card"><div class="card-head"><h3>WIP 来料预演</h3></div><div class="card-body">' +
+      '<p>两组样例使用同一批 25 片 DEMO-LOT-003，进入 CP1 的时间均为快照时点后 24 小时。选择来料信息，预览它对排产的影响。</p>' +
+      '<div class="prod-toolbar"><label class="config-field">首工序来料样例<select class="select" id="prod-wip-example">' +
+      '<option value="ETA"' + (wipExample === 'ETA' ? ' selected' : '') + '>仅预计到达</option>' +
+      '<option value="CONFIRMED"' + (wipExample === 'CONFIRMED' ? ' selected' : '') + '>已确认可用</option>' +
+      '<option value="custom" hidden disabled' + (wipExample === 'custom' ? ' selected' : '') + '>自定义记录</option>' +
+      '</select></label>' + btn('wip-preview', '预览 WIP 来料') + '</div>' +
+      '<details class="config-details"><summary>编辑模拟来料记录</summary>' +
+      '<textarea class="input prod-json" id="prod-wip-feed" aria-label="模拟 WIP 来料 JSON">' + esc(wipDraft) +
+      '</textarea></details>' +
+      '<div id="prod-wip-report" aria-live="polite">' + wipReportHTML() + '</div></div></div>';
+  }
   function eventsHTML() {
     var d=state.snapshot;
-    return (d.source==='demo'?'<div class="card"><div class="card-head"><h3>一键生产变化</h3></div><div class="card-body"><div class="prod-toolbar"><label class="config-field">选择变化样例<select id="prod-demo-event" class="select">'+demoCatalog.events.map(function(e){return '<option value="'+esc(e.key)+'"'+(presetChoice===e.key?' selected':'')+'>'+esc(e.title)+'</option>';}).join('')+'</select></label>'+btn('demo-event','应用此变化','primary')+'</div><p class="config-hint">自动选取合适 Lot / 设备，生成时间和原因。建议先选用基线方案，再应用变化并重新试排；每种变化每次载入只能应用一次。</p></div></div>':'')+
+    return wipPanel() + (d.source==='demo'?'<div class="card"><div class="card-head"><h3>一键生产变化</h3></div><div class="card-body"><div class="prod-toolbar"><label class="config-field">选择变化样例<select id="prod-demo-event" class="select">'+demoCatalog.events.map(function(e){return '<option value="'+esc(e.key)+'"'+(presetChoice===e.key?' selected':'')+'>'+esc(e.title)+'</option>';}).join('')+'</select></label>'+btn('demo-event','应用此变化','primary')+'</div><p class="config-hint">自动选取合适 Lot / 设备，生成时间和原因。建议先选用基线方案，再应用变化并重新试排；每种变化每次载入只能应用一次。</p></div></div>':'')+
       '<div class="card"><div class="card-head"><h3>数据与规则变化记录</h3></div><div class="card-body">'+table(['时间','类型','已知原因'],state.events.map(function(e){return '<tr>'+[fmt(e.time),e.kind,e.reason].map(cell).join('')+'</tr>';}))+'<p class="config-hint">记录事件事实；多种变化同时发生时，不将全部产出差额直接归因于某一事件。</p></div></div>'+
       (d.source==='demo'?'<details class="config-details"><summary>自定义变化（可选手工填写）</summary><div class="card"><div class="card-head"><h3>模拟生产变化</h3></div><div class="card-body"><div class="config-grid"><label class="config-field">事件<select class="select" id="prod-event-kind"><option value="arrival">来料时间变化</option><option value="due">内部出货日变化</option><option value="down">设备停机</option></select></label><label class="config-field">Lot<select id="prod-event-lot" class="select">'+d.lots.filter(function(l){return ['READY','FUTURE'].includes(l.state);}).map(function(l){return '<option value="'+esc(l.uid)+'">'+esc(l.lotId+' · '+l.uid)+'</option>';}).join('')+'</select></label><label class="config-field">设备（停机事件）<select id="prod-event-eqp" class="select">'+d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return '<option>'+esc(e.id)+'</option>';}).join('')+'</select></label>'+input('prod-event-time','新的可用/出货时间；停机填写结束时间',dateValue(d.asOf),'datetime-local')+input('prod-event-reason','变更原因','')+'</div>'+btn('event','保存模拟变化')+'</div></div></details>':'');
   }
@@ -231,6 +287,11 @@
       '<details class="config-details"><summary>方案与比较记录 · '+state.history.length+' 份</summary>'+btn('legacy-history','旧版历史档案')+table(['保存时间','来源','场景','说明','操作'],state.history.map(function(h){return '<tr>'+[fmt(h.time),sourceNames[h.source]||h.source,h.scenario==='actual'?'实际资源':'扩产假设',h.reason].map(cell).join('')+'<td><button class="prod-link" data-prod-history="'+esc(h.id)+'">打开记录</button></td></tr>';}))+'</details>';
   }
   function render() {
+    var context = currentWipContext();
+    if (context !== wipContext) {
+      resetWipDraft();
+      wipContext = context;
+    }
     if(!A.isProductionView())return;
     A.updateProductionShell(true);
     var root=A.$('#view-'+A.state.view); if(!root)return;
@@ -270,10 +331,25 @@
     if(id.startsWith('prod-excel-'))excelDraft[id.slice(11)]=event.target.type==='checkbox'?event.target.checked:event.target.value;
     if(id==='prod-adopt-reason')reason=event.target.value;
     if(id==='prod-snapshot')snapshotDraft=event.target.value;
+    if(id==='prod-wip-feed'){
+      wipDraft = event.target.value;
+      wipExample = 'custom';
+      var choice = A.$('#prod-wip-example');
+      if (choice) choice.value = wipExample;
+      wipPreview = null;
+      var result = A.$('#prod-wip-report');
+      if (result) result.textContent = '记录已编辑，请重新预览。';
+    }
     if(id.startsWith('prod-rule-')) { draftRules=Object.assign({},draftRules||state.rules); draftRules[id.slice(10)]=event.target.type==='number'?Number(event.target.value):event.target.value; }
     if(event.target.dataset.prodExtra)extras[event.target.dataset.prodExtra]=Number(event.target.value);
   });
   document.addEventListener('change',function(event){
+    if(event.target.id==='prod-wip-example' && currentWipContext() && ['CONFIRMED','ETA'].includes(event.target.value)){
+      wipExample = event.target.value;
+      wipDraft = JSON.stringify(sampleWipFeed(state.snapshot, wipExample), null, 2);
+      wipPreview = null;
+      render();
+    }
     if(event.target.id==='prod-demo-case'){demoChoice=event.target.value;render();}
     if(event.target.id==='prod-demo-event')presetChoice=event.target.value;
     if(event.target.id==='prod-state'){status=event.target.value;page=1;render();}
@@ -300,6 +376,7 @@
     busy=true;failure='';
     try {
       if(action.startsWith('source-')){
+        resetWipDraft();
         A.closeDrawer();
         state=await request('/source',{source:action.slice(7)});job=null;draftRules=null;reason='';excelDraft={};chartPlanId=null;
         if(action==='source-excel'&&!state.snapshot)state=await request('/excel',{});
@@ -311,10 +388,34 @@
         state=await request('/excel',excelDraft);excelDraft={};job=null;chartPlanId=null;
       }
       if(action==='demo'){
+        resetWipDraft();
         state=await request('/demo',{case:demoChoice});job=null;draftRules=null;reason='';scene='actual';trialMode='shadow';tab='trial';snapshotDraft='';validationReport=null;
         extras=Object.assign({},state.snapshot.demoCase.suggestedExpansion||{});query='';product='all';status='all';page=1;
       }
       if(action==='demo-check')validationReport=await request('/demo-check',{});
+      if(action==='wip-preview'){
+        wipPreview = null;
+        var previewContext = currentWipContext(), draft = wipDraft, feed;
+        if (!previewContext || draft === null) throw new Error('请先载入客户主线演示场景');
+        try { feed = JSON.parse(draft); } catch (error) { throw new Error('模拟来料 JSON 格式有误，请检查后重新预览'); }
+        var preview = await request('/wip-preview',feed);
+        if (previewContext === currentWipContext() && draft === wipDraft) {
+          wipPreview = {feed:feed, draft:draft, context:previewContext, result:preview};
+        }
+      }
+      if(action==='wip-apply'){
+        if (!wipPreview || wipPreview.context !== currentWipContext() || wipPreview.draft !== wipDraft ||
+            !wipPreview.result.report.accepted || !wipPreview.result.report.applied) {
+          throw new Error('请重新预览当前演示快照上的来料记录');
+        }
+        var chosen = wipPreview;
+        wipPreview = null;
+        state = await request('/wip-apply',{contextHash:chosen.result.contextHash, feed:chosen.feed});
+        job = null;
+        trialMode = 'shadow';
+        tab = 'trial';
+        A.toast('演示快照已更新，请开始影子试排，比较后选用');
+      }
       if(action==='demo-event'){state=await request('/demo-event',{event:presetChoice});A.toast('变化已保存，请重新试排比较');}
       if(action==='rules'){state=await request('/rules',draftRules||state.rules);draftRules=null;}
       if(action==='snapshot'){state=await request('/snapshot',JSON.parse(snapshotDraft));}

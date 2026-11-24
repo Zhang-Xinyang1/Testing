@@ -318,6 +318,19 @@ def review_facts(state, old, snapshot):
         state['factBaseline']=baseline
 
 
+def preview_wip_receipt(state, feed):
+    """Bind the reviewed feed to the exact demo state, including the selected plan."""
+    from production_wip_preview import preview_wip
+    snapshot = state.get('snapshot')
+    if not snapshot or snapshot.get('source') != 'demo':
+        raise ValueError('请在演示数据中预演 WIP 来料')
+    candidate, report = preview_wip(snapshot, feed)
+    token = None
+    if report['accepted']:
+        token = identity([state.get('_storeVersion'), context_hash(state), feed])
+    return candidate, {'contextHash': token, 'report': report}
+
+
 def update(config, action, body):
     with LOCK:
         state = read_state(config)
@@ -358,6 +371,34 @@ def update(config, action, body):
             snapshot,reason=demo_event(state['snapshot'],body.get('event'))
             state['snapshot']=validate_snapshot(snapshot)
             record_change(state,'一键模拟变化',reason)
+        elif action == 'wip-apply':
+            feed = body.get('feed')
+            # A client may have lost the response after a successful commit.
+            snapshot = state.get('snapshot') or {}
+            previous = snapshot.get('wipPilot') or {}
+            if (snapshot.get('source') == 'demo' and previous.get('token')
+                    and previous['token'] == body.get('contextHash')
+                    and previous.get('feedHash') == identity(feed)):
+                return state
+            candidate, receipt = preview_wip_receipt(state, feed)
+            report = receipt['report']
+            if not report['accepted']:
+                raise ValueError('WIP 来料未通过核对：' + '；'.join(report['errors'][:5]))
+            if receipt['contextHash'] != body.get('contextHash'):
+                raise store.StateConflict('来料记录或演示基线已变化，请重新预演')
+            if not report['applied']:
+                raise ValueError('这份 WIP 来料没有可应用的记录')
+            old = state['snapshot']
+            candidate['snapshotId'] = 'DEMO-WIP-' + receipt['contextHash'][:24]
+            candidate['wipPilot'] = {
+                'baseSnapshotId': old['snapshotId'], 'asOf': feed['asOf'],
+                'token': receipt['contextHash'], 'feedHash': identity(feed),
+                'records': copy.deepcopy(feed['records']), 'report': report,
+            }
+            state['snapshot'] = validate_snapshot(candidate)
+            review_facts(state, old, state['snapshot'])
+            record_change(state, 'WIP 来料预演', '确认 %d 条可用时间，%d 条仅观察。' %
+                          (report['applied'], report['observed']))
         elif action == 'snapshot':
             try:
                 snapshot = validate_snapshot(body)

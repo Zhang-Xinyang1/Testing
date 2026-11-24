@@ -14,7 +14,7 @@ from scheduler import compact_result, run_schedule
 from schedule_history import list_schedules, read_schedule, save_schedule
 from input_errors import error_response
 from production import (read_state, update as production_update, adopt as production_adopt,
-                        daily_check, archive as archive_production, read_plan)
+                        daily_check, archive as archive_production, read_plan, preview_wip_receipt)
 from production_jobs import TrialJobs
 from production_demo import demo_catalog, check_examples
 from production_excel import excel_snapshot
@@ -202,14 +202,21 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('请求必须为对象')
             if action == 'demo-check':
                 return self._json(check_examples())
-            if action in ('demo','source','excel','snapshot'):
+            if action == 'wip-preview':
+                state = read_state(self.server.config_path)
+                _, receipt = preview_wip_receipt(state, body)
+                return self._json(receipt)
+            if action in ('demo','source','excel','snapshot','wip-apply'):
                 jobs=self.production_jobs()
                 with jobs.lock:
                     if jobs.job and jobs.job['status']=='running':
-                        raise ValueError('请先取消当前试排，再切换演示场景')
+                        raise ValueError('请先取消当前试排，再更改生产输入')
                     if action=='excel':body=excel_snapshot(build_payload(self.server.config_path),body)
                     result=production_update(self.server.config_path,action,body)
-                    jobs.clear()
+                    # A retry of an applied WIP feed must preserve later trial results.
+                    # Existing candidates are already bound to the old planning context.
+                    if action != 'wip-apply':
+                        jobs.clear()
                 return self._json(self.production_state(result))
             if action == 'trial':
                 jobs=self.production_jobs()
