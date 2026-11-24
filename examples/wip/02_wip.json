@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "batchId": "SAMPLE-20261120-0800-B2",
+  "baseSnapshotId": "WIP-723b0688b36426af4a225c30e3b69f26",
+  "asOf": "2026-11-20T08:25:00+08:00",
+  "pageCount": 2,
+  "total": 2,
+  "pages": [
+    {
+      "batchId": "SAMPLE-20261120-0800-B2",
+      "page": 1,
+      "events": [
+        {
+          "eventId": "SAMPLE-20261120-0800-E4",
+          "version": 1,
+          "kind": "RELEASE",
+          "uid": "0001",
+          "recordedAt": "2026-11-20T08:25:00+08:00",
+          "operationId": "OP1",
+          "step": "CP1",
+          "eqp": "CP-01",
+          "processEnd": "2026-11-20T08:24:00+08:00",
+          "releasedAt": "2026-11-20T08:25:00+08:00"
+        }
+      ]
+    },
+    {
+      "batchId": "SAMPLE-20261120-0800-B2",
+      "page": 2,
+      "events": [
+        {
+          "eventId": "SAMPLE-20261120-0800-E5",
+          "version": 1,
+          "kind": "FORECAST",
+          "uid": "0001",
+          "recordedAt": "2026-11-20T08:25:00+08:00",
+          "at": "2026-11-20T08:40:00+08:00"
+        }
+      ]
+    }
+  ]
+}

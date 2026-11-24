@@ -58,6 +58,15 @@ def normalize_identifiers(data):
     return result
 
 
+def wip_timestamp(value, field):
+    if not isinstance(value, str) or not re.search(r'[Tt ]\d{1,2}:\d{2}', value):
+        raise ValueError(field + ' 须明确到时分')
+    try:
+        return parse_datetime(value).astimezone(CST)
+    except (ValueError, OverflowError) as error:
+        raise ValueError(field + ' 日期时间无效') from error
+
+
 def parse_datetime(value):
     text = str(value or '').strip()
     text = text.replace('年', '-').replace('月', '-').replace('日', '').replace('/', '-')

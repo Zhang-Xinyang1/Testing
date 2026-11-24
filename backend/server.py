@@ -19,7 +19,7 @@ from production_jobs import TrialJobs
 from production_demo import demo_catalog, check_examples
 from production_excel import excel_snapshot
 from production_chart import chart_projection
-from production_store import StateConflict
+from production_store import StateConflict, read_wip_batch
 
 sys.path.insert(0, ROOT)
 STATIC_ROOT = os.path.join(ROOT, 'frontend')
@@ -70,6 +70,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'job':self.production_jobs().read()})
             if path == '/api/production/demo-catalog':
                 return self._json(demo_catalog())
+            if path.startswith('/api/production/wip-batches/'):
+                batch = read_wip_batch(self.server.config_path,unquote(path[len('/api/production/wip-batches/'):]))
+                return self._json(batch) if batch else self._json({'error':'未接收过此 WIP 批次'},404)
             if path.startswith('/api/production/plans/'):
                 return self._json(read_plan(self.server.config_path,path.rsplit('/',1)[-1]))
             if path == '/api/runs':
@@ -179,7 +182,8 @@ class Handler(BaseHTTPRequestHandler):
             from production_time import now_ms, milliseconds, live_facts
             from production_rules import rules
             now=now_ms()
-            state['dataAgeMinutes']=round((now-milliseconds(state['snapshot']['asOf']))/60000,1)
+            snapshot = state['snapshot']
+            state['dataAgeMinutes']=round((now-milliseconds(snapshot.get('masterAsOf',snapshot['asOf'])))/60000,1)
             try:
                 live_facts(state['snapshot'],rules(state['rules']),now)
                 state['liveTimeIssue']=None
@@ -205,6 +209,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'wip-preview':
                 state = read_state(self.server.config_path)
                 _, receipt = preview_wip_receipt(state, body)
+                return self._json(receipt)
+            if action in ('wip-batch-preview','wip-batch-import'):
+                from production import receive_wip_batch
+                receipt = receive_wip_batch(self.server.config_path,body,publish=action=='wip-batch-import')
                 return self._json(receipt)
             if action in ('demo','source','excel','snapshot','wip-apply'):
                 jobs=self.production_jobs()

@@ -1,23 +1,12 @@
 """Preview WIP arrivals against one stable demo snapshot without publishing it."""
 from copy import deepcopy
-import re
-
-from input_rules import CST, identifier, parse_datetime
+from input_rules import identifier, wip_timestamp as _timestamp
 
 
 def _identifier(value, field):
     if not isinstance(value, str) or not identifier(value):
         raise ValueError(field + ' 须为非空字符串')
     return identifier(value)
-
-
-def _timestamp(value, field):
-    if not isinstance(value, str) or not re.search(r'[Tt ]\d{1,2}:\d{2}', value):
-        raise ValueError(field + ' 须明确到时分')
-    try:
-        return parse_datetime(value).astimezone(CST)
-    except (ValueError, OverflowError) as error:
-        raise ValueError(field + ' 日期时间无效') from error
 
 
 def _check_fields(obj, allowed, label):

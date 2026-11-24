@@ -30,7 +30,7 @@ def output_ledger(snapshot, predictions=()):
         ids.add(uid)
         if lot['state']=='DONE':
             complete,source=time_ms(lot['actualComplete']),'actual'
-        elif lot['state']=='RUNNING':
+        elif lot['state'] in ('RUNNING','EXTERNAL'):
             complete,source=time_ms(lot.get('externalComplete')),'external'
         elif lot['state']=='HOLD' or not lot.get('availableAt') or not lot.get('shipDue'):
             complete,source=None,'unconfirmed'
@@ -49,7 +49,7 @@ def output_ledger(snapshot, predictions=()):
         products.append(dict(ppn=demand['ppn'],target=demand['wafer'],actual=actual,forecast=forecast,
                              effective=min(demand['wafer'],forecast),shortage=max(0,demand['wafer']-forecast),
                              rate=min(1,forecast/demand['wafer']) if demand['wafer'] else 1,
-                             externalUnknownWafers=sum(r['wafer'] for r in selected if r['state']=='RUNNING' and r['complete'] is None)))
+                             externalUnknownWafers=sum(r['wafer'] for r in selected if r['state'] in ('RUNNING','EXTERNAL') and r['complete'] is None)))
     # Evaluation membership comes from input, never from tasks a candidate kept.
     late=unserved=weighted=0
     for row in rows:

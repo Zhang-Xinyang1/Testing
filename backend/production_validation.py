@@ -66,7 +66,7 @@ def validate_plan(snapshot, plan, settings):
     for lot in snapshot['lots']:
         if lot['state']!='RUNNING':continue
         w=lot['current'];resource=w.get('chamber') or w['eqp']
-        key=(resource,time_ms(w['start']),time_ms(w['end']),w['recipe'])
+        key=(resource,time_ms(w['start']),time_ms(w['end']),w['recipe'],w.get('batchId'))
         if w.get('chamber'):
             wip_batches[key].append(lot)
             require(len(wip_batches[key])<=4,'同腔在制批次超过 4 Lot')
@@ -111,7 +111,7 @@ def validate_plan(snapshot, plan, settings):
         seen.add(uid);source=source_lots[uid]
         require(all(lot.get(k)==source.get(k) for k in ('ppn','wafer','state','platform','lotId')),'Lot 身份、数量或状态被改写：'+uid)
         tasks=lot.get('tasks',[]);route=snapshot['flows'][source['ppn']]
-        if source['state'] in ('DONE','RUNNING','HOLD') or not source.get('availableAt') or not source.get('shipDue'):
+        if source['state'] in ('DONE','RUNNING','EXTERNAL','HOLD') or not source.get('availableAt') or not source.get('shipDue'):
             require(not tasks,'不可新排的 Lot 生成了加工任务：'+uid)
             derived.append(dict(uid=uid,complete=None));continue
         require(len(tasks)<=len(route),'工序数量超过路线：'+uid)

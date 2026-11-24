@@ -9,7 +9,8 @@ import json
 from input_rules import parse_datetime, identifier, CST
 
 DATE_FIELDS = {'asOf','availableAt','shipDue','actualComplete','externalComplete',
-               'start','end','early','due','over','expectedEnd','completeTime','updatedAt'}
+               'start','end','early','due','over','expectedEnd','completeTime','updatedAt',
+               'processEnd','releasedAt','masterAsOf'}
 
 
 def canonical(value, key=''):
@@ -53,7 +54,7 @@ def reconcile(previous, incoming):
     issues = list(incoming.get('factIssues',[]))
     if not previous or previous.get('source')!=incoming.get('source'):
         return issues
-    protected = [l for l in previous['lots'] if l['state'] in ('RUNNING','DONE')]
+    protected = [l for l in previous['lots'] if l['state'] in ('RUNNING','EXTERNAL','DONE')]
     if protected and not (previous.get('identityStable') and incoming.get('identityStable')):
         issues.append('已有在制或完工事实，但跨快照稳定标识尚未确认，无法核实资源释放与产出')
         return issues
@@ -64,22 +65,34 @@ def reconcile(previous, incoming):
         row = new.get(old['uid'])
         if row is None:
             # Old-month completions need not reappear in a new monthly scope.
-            if old['state']=='RUNNING' or (old['state']=='DONE' and previous['month']==incoming['month']):
+            if old['state'] in ('RUNNING','EXTERNAL') or (old['state']=='DONE' and previous['month']==incoming['month']):
                 issues.append('原%s Lot %s 在完整快照中缺失，需明确完成或释放事实' %
-                              ('在制' if old['state']=='RUNNING' else '已完工',old['lotId']))
+                              (old['state'],old['lotId']))
             continue
         if old['ppn']!=row['ppn'] or old['wafer']!=row['wafer']:
             issues.append('Lot %s 身份或数量变化；拆合批、返工和数量修订需明确业务事件'%old['lotId'])
         if old['state']=='DONE' and (row['state']!='DONE' or parse_datetime(row['actualComplete'])!=parse_datetime(old['actualComplete'])):
             issues.append('已完工 Lot %s 不允许由普通快照回退或改写；需返工/撤销完工事件'%old['lotId'])
+        if old['state']=='EXTERNAL' or (old['state']=='DONE' and old.get('handoff')):
+            if row['state'] not in ('EXTERNAL','DONE') or canonical(row.get('handoff')) != canonical(old['handoff']):
+                issues.append('已移交 Lot %s 的移交事实缺失或被改写'%old['lotId'])
         if old['state']=='RUNNING':
-            if row['state']=='DONE':
+            if row['state'] in ('EXTERNAL','DONE') and row.get('handoff'):
+                handoff = row['handoff']
+                current = old['current']
+                if (any(identifier(handoff.get(k))!=identifier(current.get(k)) for k in ('eqp','step','chamber'))
+                        or parse_datetime(handoff['start']) != parse_datetime(current['start'])
+                        or (current.get('operationId') and current['operationId'] != handoff['operationId'])):
+                    issues.append('移交与原在制占用不符：'+old['lotId'])
+            elif row['state']=='DONE':
                 if parse_datetime(row['actualComplete'])<parse_datetime(old['current']['start']):
                     issues.append('Lot %s 的完工时间早于原在制开始'%old['lotId'])
             elif row['state']!='RUNNING':
                 issues.append('在制 Lot %s 缺少明确释放事实，不允许直接变为 %s'%(old['lotId'],row['state']))
             else:
                 keys=('eqp','chamber','step','recipe','card','start')
+                if old['current'].get('operationId'):
+                    keys += ('operationId',)
                 if any(canonical(old['current'].get(k),k)!=canonical(row['current'].get(k),k) for k in keys):
                     issues.append('在制 Lot %s 的工序或装配已变化，需明确工序结束/转移事件'%old['lotId'])
                 eqp=old['current']['eqp']

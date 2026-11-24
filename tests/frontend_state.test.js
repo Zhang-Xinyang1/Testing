@@ -868,6 +868,33 @@ test('input self-check distinguishes expected rejection from a test failure',asy
   assert.match(html,/不保存样例，不启动排产/);
 });
 
+test('MES files require an explicit receipt and edited WIP must be revalidated',async()=>{
+  const snapshot={source:'mes',month:'2026-11',snapshotId:'MES-0',identityStable:true,
+    asOf:'2026-11-20T08:00:00+08:00',lots:[],demands:[],equipment:[]};
+  const env=productionEnvironment(snapshot), calls=[], api=env.context.fetch;
+  const receipt={batchId:'B',baseSnapshotId:'MES-0',newEvents:1,replayedEvents:0,
+    rows:[{page:1,row:1,uid:'0001',kind:'ETA',status:'observed'}]};
+  env.context.fetch=async(url,options)=>{
+    if(!url.includes('/wip-batch-'))return api(url,options);
+    calls.push(url);
+    if(url.endsWith('-import'))env.workspace.snapshot={...snapshot,snapshotId:'MES-1'};
+    return {ok:true,json:async()=>receipt};
+  };
+  await env.action('refresh');env.app.openProductionSettings();
+  const panel=()=>env.nodes['#view-replanning'].innerHTML;
+  assert.match(panel(),/接收 MES WIP 批次/);
+  const file=id=>env.listeners.change({target:{id,files:[{size:10,text:async()=>'{"batchId":"B"}'}]}});
+  await file('prod-snapshot-file');
+  assert.equal(env.nodes['#prod-snapshot'].value,'{"batchId":"B"}');
+  await file('prod-mes-wip-file');await env.action('mes-wip-preview');
+  assert.match(panel(),/仅观察/);assert.match(panel(),/接收本批 WIP/);
+  env.listeners.input({target:{id:'prod-mes-wip',value:'{"batchId":"B2"}',dataset:{}}});
+  await env.action('mes-wip-import');assert.equal(calls.length,1);
+  await file('prod-mes-wip-file');await env.action('mes-wip-preview');await env.action('mes-wip-import');
+  assert.equal(calls.length,3);assert.equal(env.workspace.snapshot.snapshotId,'MES-1');
+  assert.equal(env.requests.some(r=>r.url.endsWith('/trial')||r.url.endsWith('/adopt')),false);
+});
+
 function wipEnvironment() {
   const snapshot={source:'demo',month:'2026-11',snapshotId:'BASIC-1',asOf:'2026-11-20T08:00:00+08:00',
     demoCase:{key:'basic',title:'客户主线'},lots:[],demands:[],equipment:[]};

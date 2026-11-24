@@ -35,6 +35,8 @@ def connection(config):
         db.execute('CREATE TABLE IF NOT EXISTS sources (source TEXT PRIMARY KEY, body TEXT NOT NULL)')
         db.execute('CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, body TEXT NOT NULL)')
         db.execute('CREATE TABLE IF NOT EXISTS snapshots (source TEXT NOT NULL, id TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(source,id))')
+        db.execute('CREATE TABLE IF NOT EXISTS wip_batches (id TEXT PRIMARY KEY, digest TEXT NOT NULL, raw TEXT NOT NULL, receipt TEXT NOT NULL)')
+        db.execute('CREATE TABLE IF NOT EXISTS wip_events (id TEXT NOT NULL, version INTEGER NOT NULL, digest TEXT NOT NULL, uid TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(id,version))')
         db.execute('CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
         if not db.execute("SELECT 1 FROM metadata WHERE name='legacyImported'").fetchone():
             # Import everything in this transaction. Corrupt files fail visibly;
@@ -89,7 +91,27 @@ def _save_plan(db, plan, adopted):
     db.execute('INSERT OR REPLACE INTO plans VALUES (?,?)',(plan['id'],dumps(plan)))
 
 
-def save(config, state, plan=None, adopted=False, snapshot_identity=None):
+def wip_history(config, batch_id, event_ids):
+    with connection(config) as db:
+        batch = db.execute('SELECT digest, receipt FROM wip_batches WHERE id=?', (batch_id,)).fetchone()
+        history = {}
+        ids = list(set(event_ids))
+        for offset in range(0, len(ids), 400):
+            group = ids[offset:offset+400]
+            markers = ','.join('?' for _ in group)
+            for ident, version, digest, uid, kind in db.execute(
+                    f'SELECT id,version,digest,uid,kind FROM wip_events WHERE id IN ({markers})', group):
+                history.setdefault(ident, {})[version] = (digest, uid, kind)
+        return (json.loads(batch[1]), batch[0]) if batch else None, history
+
+
+def read_wip_batch(config, batch_id):
+    with connection(config) as db:
+        row = db.execute('SELECT raw,receipt FROM wip_batches WHERE id=?', (batch_id,)).fetchone()
+        return {'batch':json.loads(row[0]), 'receipt':json.loads(row[1])} if row else None
+
+
+def save(config, state, plan=None, adopted=False, snapshot_identity=None, wip=None):
     body = copy.deepcopy(state)
     expected = body.pop('_storeVersion', -1)
     with connection(config) as db:
@@ -105,6 +127,11 @@ def save(config, state, plan=None, adopted=False, snapshot_identity=None):
             db.execute('INSERT OR IGNORE INTO snapshots VALUES (?,?,?)',snapshot_identity)
         if plan:
             _save_plan(db,plan,adopted)
+        if wip:
+            raw, receipt, events, digest = wip
+            db.execute('INSERT INTO wip_batches VALUES (?,?,?,?)',
+                       (raw['batchId'],digest,dumps(raw),dumps(receipt)))
+            db.executemany('INSERT INTO wip_events VALUES (?,?,?,?,?)', events)
         db.execute('INSERT OR REPLACE INTO workspace VALUES (1,?,?)',(actual+1,dumps(body)))
         name = (body.get('snapshot') or {}).get('source') or body.get('selectedSource')
         if name in ('excel','mes','demo'):

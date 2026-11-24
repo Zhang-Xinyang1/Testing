@@ -26,7 +26,7 @@ REQUIRED_BACKEND = ('server.py', 'server_core.py', 'data_sources.py', 'diagnosti
                     'input_errors.py', 'schedule_history.py', 'task_overrides.py',
                     'production.py', 'production_rules.py', 'production_demo.py', 'production_excel.py', 'production_chart.py', 'production_jobs.py',
                     'production_facts.py', 'production_ledger.py', 'production_store.py', 'production_time.py', 'production_validation.py',
-                    'production_wip_preview.py')
+                    'production_wip_preview.py', 'wip_intake.py')
 REQUIRED_FRONTEND = (
     'index.html',
     'assets/styles.css',

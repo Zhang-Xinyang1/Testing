@@ -16,7 +16,8 @@ def milliseconds(value):
 
 def live_facts(snapshot, settings, now):
     asof=milliseconds(snapshot['asOf'])
-    if asof>now+MINUTE or now-asof>settings['snapshotMaxAgeMinutes']*MINUTE:
+    oldest=milliseconds(snapshot.get('masterAsOf', snapshot['asOf']))
+    if asof>now+MINUTE or now-oldest>settings['snapshotMaxAgeMinutes']*MINUTE:
         raise ValueError('现场数据时点已过期或超前，请接收当前完整快照；历史数据请使用影子试排')
     for lot in snapshot['lots']:
         if lot['state']=='RUNNING' and milliseconds(lot['current']['end'])<=now:
@@ -41,7 +42,7 @@ def execution_context(snapshot, settings, request):
         start=milliseconds(request['executableFrom'])
         if start<max(asof,now):raise ValueError('计划可执行起点不能早于当前时间或数据时点')
     return dict(mode=mode,start=start,requestedAt=now,
-                validUntil=min(start,asof+settings['snapshotMaxAgeMinutes']*MINUTE))
+                validUntil=min(start,milliseconds(snapshot.get('masterAsOf',snapshot['asOf']))+settings['snapshotMaxAgeMinutes']*MINUTE))
 
 
 def check_adoption(plan, snapshot, settings):

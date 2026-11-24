@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "source": "mes",
+  "snapshotId": "SAMPLE-20261120-0800",
+  "month": "2026-11",
+  "asOf": "2026-11-20T08:00:00+08:00",
+  "identityStable": true,
+  "demands": [
+    {
+      "ppn": "SAMPLE",
+      "wafer": 50
+    }
+  ],
+  "equipment": [
+    {
+      "id": "CP-01",
+      "type": "T5830",
+      "status": "RUN",
+      "proberId": "PR-01",
+      "recipe": "R1",
+      "card": "C1"
+    }
+  ],
+  "flows": {
+    "SAMPLE": [
+      [
+        "CP1",
+        "R1",
+        1
+      ]
+    ]
+  },
+  "recipes": [
+    {
+      "recipe": "R1",
+      "cards": [
+        "C1"
+      ]
+    }
+  ],
+  "lots": [
+    {
+      "uid": "0001",
+      "lotId": "SAMPLE-L",
+      "ppn": "SAMPLE",
+      "wafer": 25,
+      "platform": "T5830",
+      "state": "FUTURE",
+      "shipDue": "2026-11-21T08:00:00+08:00"
+    },
+    {
+      "uid": "0002",
+      "lotId": "SAMPLE-L",
+      "ppn": "SAMPLE",
+      "wafer": 25,
+      "platform": "T5830",
+      "state": "FUTURE",
+      "shipDue": "2026-11-21T08:00:00+08:00"
+    }
+  ]
+}

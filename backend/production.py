@@ -20,7 +20,7 @@ from scheduler import run, compact_result, make_json_safe, parse_date, iso_date,
 
 LOCK = threading.RLock()
 CST = timezone(timedelta(hours=8))
-STATES = ('READY', 'FUTURE', 'HOLD', 'RUNNING', 'DONE')
+STATES = ('READY', 'FUTURE', 'HOLD', 'RUNNING', 'EXTERNAL', 'DONE')
 
 
 def stamp():
@@ -86,6 +86,8 @@ def validate_snapshot(raw):
     except (ValueError,OverflowError) as error:
         raise ValueError('计划月份无效，须为有效的 YYYY-MM') from error
     asof = parse_datetime(d['asOf'])
+    if 'masterAsOf' in d and parse_datetime(d['masterAsOf']) > asof:
+        raise ValueError('主数据时点不能晚于生产快照')
     if not first <= asof < last:
         raise ValueError('快照时点必须在计划月份内')
     def quantity(value, label, low=0, high=100000000):
@@ -190,6 +192,10 @@ def validate_snapshot(raw):
             current = row.get('current') or {}
             if not isinstance(current,dict):
                 raise ValueError('在制 current 必须为当前工序占用对象')
+            if 'operationId' in current and (not isinstance(current['operationId'],str) or not current['operationId'].strip()):
+                raise ValueError('在制 operationId 须为非空字符串')
+            if current.get('batchId') is not None and (not isinstance(current['batchId'],str) or not current['batchId'].strip()):
+                raise ValueError('在制 batchId 须为非空字符串')
             for key in ('eqp','recipe','card','chamber','step'):
                 current[key] = identifier(current.get(key))
             if current['eqp'] not in eqps or not date(current.get('start'),'当前工序开始') <= asof or date(current.get('end'),'预计释放')<=date(current.get('start'),'当前工序开始'):
@@ -212,9 +218,29 @@ def validate_snapshot(raw):
                 d['factIssues'].append('在制 Lot %s 当前工序/Recipe 不属于已提供路线，已保留占用，需补齐路线版本'%row['lotId'])
             if 'OVEN' not in eqps[current['eqp']]['type'] and eqps[current['eqp']]['type'] not in row['platform'].split(';'):
                 d['factIssues'].append('在制 Lot %s 的当前机台不符合 Platform，需核对实际装配'%row['lotId'])
+            if current.get('processEnd') and not (date(current['start'],'工序开始') <=
+                    date(current['processEnd'],'预计加工结束') <= date(current['end'],'预计释放')):
+                raise ValueError('预计加工结束须在资源占用区间内')
+        if row['state'] == 'EXTERNAL' or row.get('handoff'):
+            handoff = row.get('handoff')
+            if row['state'] not in ('EXTERNAL','DONE') or not isinstance(handoff, dict) or row.get('current'):
+                raise ValueError('外部接续需要独立移交记录，不能同时占用机台')
+            for field in ('eqp','step','eventId','operationId'):
+                if not isinstance(handoff.get(field), str) or not handoff[field].strip():
+                    raise ValueError('移交缺少 '+field)
+            if not (date(handoff.get('start'),'上机') <= date(handoff.get('processEnd'),'加工结束')
+                    <= date(handoff.get('releasedAt'),'设备释放') <= asof):
+                raise ValueError('移交的开始、加工结束、释放时序无效')
+            if row['state']=='DONE' and completed < date(handoff['processEnd'],'加工结束'):
+                raise ValueError('最终完工不能早于已移交工序的加工结束')
         if row.get('externalComplete'):
-            if row['state'] != 'RUNNING' or date(row['externalComplete'],'外部完工预测') < date(row['current']['end'],'预计释放'):
-                raise ValueError('外部完工预测仅适用于在制，且不得早于当前工序释放')
+            if row['state'] not in ('RUNNING','EXTERNAL'):
+                raise ValueError('外部完工预测仅适用于在制或已移交批次')
+            work = row.get('current') or row.get('handoff')
+            if date(row['externalComplete'],'外部完工预测') < date(work.get('processEnd') or work['end'],'加工结束'):
+                raise ValueError('外部完工预测不得早于当前工序结束')
+            if date(row['externalComplete'],'外部完工预测') < asof:
+                row['expiredExternalEstimate']=row.pop('externalComplete')
     for row in d['borrow']:
         row['eqp'], row['recipe'] = identifier(row.get('eqp')), identifier(row.get('recipe'))
         if row['eqp'] not in eqps or 'OVEN' in eqps[row['eqp']]['type'] or row['recipe'] not in recipes:
@@ -311,7 +337,7 @@ def review_facts(state, old, snapshot):
         # earlier or partially inconsistent snapshot, even after many retries.
         baseline=copy.deepcopy(baseline);known={l['uid'] for l in baseline['lots']}
         baseline['lots'].extend(copy.deepcopy(l) for l in snapshot['lots']
-                                if l['state'] in ('RUNNING','DONE') and l['uid'] not in known)
+                                if l['state'] in ('RUNNING','EXTERNAL','DONE') and l['uid'] not in known)
         known_pm={p.get('id') for p in baseline.get('pm',[])}
         baseline.setdefault('pm',[]).extend(copy.deepcopy(p) for p in snapshot.get('pm',[])
                                            if p.get('id') and p['id'] not in known_pm)
@@ -329,6 +355,42 @@ def preview_wip_receipt(state, feed):
     if report['accepted']:
         token = identity([state.get('_storeVersion'), context_hash(state), feed])
     return candidate, {'contextHash': token, 'report': report}
+
+
+def receive_wip_batch(config, feed, publish=False):
+    from wip_intake import prepare_batch
+    with LOCK:
+        state = read_state(config)
+        try:
+            candidate, receipt, events = prepare_batch(config,state,feed)
+        except ValueError as error:
+            # A failed attempted receipt on the current MES baseline signals missing facts.
+            # Stale writers, read-only previews and other sources do not alter the workspace.
+            base = state.get('snapshot') or {}
+            if (publish and isinstance(feed,dict) and not isinstance(error,store.StateConflict) and base.get('source')=='mes'
+                    and feed.get('baseSnapshotId')==base['snapshotId']):
+                pending=state.get('receiptFailure') or {}
+                if not pending or (pending.get('source')=='wip' and pending.get('batchId') in (None,feed.get('batchId'))):
+                    state['receiptFailure'] = {'time':stamp(),'message':str(error),'source':'wip',
+                                               'batchId':feed.get('batchId')}
+                state['changePending'] = True
+                write_state(config,state)
+            raise
+        if publish and candidate is not None:
+            failure = state.get('receiptFailure')
+            if failure and failure.get('source')!='wip':
+                raise ValueError('上一次完整快照接收失败，请先重新接收完整快照')
+            if failure and failure.get('batchId') and failure['batchId']!=feed['batchId']:
+                raise ValueError('请先重发上一次失败的 WIP 批次或接收完整快照')
+            state.pop('receiptFailure',None)
+            state['snapshot']=candidate
+            state['lastWipReceipt']={k:v for k,v in receipt.items() if k!='rows'}
+            state['factBaseline']=copy.deepcopy(candidate)
+            state['factIssues']=[]
+            record_change(state,'MES WIP 接收', f"{receipt['batchId']}：{receipt['newEvents']} 条新事件，{receipt['replayedEvents']} 条重复")
+            store.save(config,state,snapshot_identity=('mes',candidate['snapshotId'],snapshot_digest(candidate)),
+                       wip=(feed,receipt,events,receipt['contentHash']))
+        return dict(receipt,published=publish or receipt['replay'])
 
 
 def update(config, action, body):
@@ -562,7 +624,7 @@ def prepare(state, request):
         else:pending_pm.append(pm)
     rows, source, wip, held = [], [], [], []
     for lot in d['lots']:
-        if lot['state'] == 'DONE' or lot['uid'] in frozen_ids:
+        if lot['state'] in ('DONE','EXTERNAL') or lot['uid'] in frozen_ids:
             continue
         if lot['state'] == 'HOLD' or (lot['state'] != 'RUNNING' and (not lot.get('availableAt') or not lot.get('shipDue'))):
             held.append(dict(lot, reason=lot.get('holdReason') or ('缺少内部出货日' if not lot.get('shipDue') else '缺少明确可用时间')))
@@ -576,7 +638,7 @@ def prepare(state, request):
     for demand in d['demands']:
         done = sum(l['wafer'] for l in d['lots'] if l['ppn']==demand['ppn'] and l['state']=='DONE' and first.timestamp()*1000 <= parse_date(l['actualComplete']) < end)
         kept = sum(l['wafer'] for l in frozen if l['ppn']==demand['ppn'] and l.get('complete') is not None and l['complete'] < end)
-        external=sum(l['wafer'] for l in d['lots'] if l['ppn']==demand['ppn'] and l['state']=='RUNNING' and l.get('externalComplete') and asof<=parse_date(l['externalComplete'])<end)
+        external=sum(l['wafer'] for l in d['lots'] if l['ppn']==demand['ppn'] and l['state'] in ('RUNNING','EXTERNAL') and l.get('externalComplete') and asof<=parse_date(l['externalComplete'])<end)
         types = sorted({t for l in d['lots'] if l['ppn']==demand['ppn'] for t in l['platform'].split(';')})
         targets.append({'ppn':demand['ppn'],'platform':';'.join(types),'mps':max(0,demand['wafer']-done-kept-external)})
     data = {'meta':{'start':iso_date(planning_start),'monthEnd':last.isoformat(),'days':math.ceil((end-planning_start)/DAY),'month':d['month']},
@@ -596,9 +658,9 @@ def prepare(state, request):
         if w.get('chamber'):
             key = (w['chamber'],interval)
             members = bake_wip.setdefault(key, [])
-            members.append(w['recipe'])
+            members.append((w['recipe'],w.get('batchId')))
             if len(members)>4 or len(set(members))>1:
-                raise ValueError('同腔体在制批次最多 4 Lot，且 Recipe 必须相同')
+                raise ValueError('同腔体在制批次最多 4 Lot，且 Recipe 与批次标识必须相同')
             if len(members)>1:
                 continue
         calendars.setdefault(w.get('chamber') or w['eqp'], []).append(interval)
@@ -653,7 +715,7 @@ def project(state, request, prepared, result):
         forecast = totals[ppn]['forecast']
         old = old_products.get(ppn)
         old_by_now = sum(l['wafer'] for l in (baseline or {}).get('lots',[]) if l['ppn']==ppn and l.get('complete') is not None and start <= l['complete'] <= asof)
-        missing = sum(l['wafer'] for l in selected if l['state']=='RUNNING' and not l.get('externalComplete'))
+        missing = sum(l['wafer'] for l in selected if l['state'] in ('RUNNING','EXTERNAL') and not l.get('externalComplete'))
         p = dict(ppn=ppn,target=demand['wafer'],actual=actual,forecast=forecast,
                  actualPlanDelta=actual-old_by_now if baseline else None,
                  forecastDelta=forecast-old['forecast'] if old else None,
@@ -666,8 +728,9 @@ def project(state, request, prepared, result):
             alerts.append({'kind':'待排条件不足','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：'+lot['reason']})
         if lot.get('complete') and lot.get('shipDue') and lot['complete'] - parse_date(lot['shipDue']) > r['delayAlertHours']*HOUR:
             alerts.append({'kind':'交期风险','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：预计/实际完工晚于内部出货日'})
-        if lot['state']=='RUNNING' and not lot.get('externalComplete'):
-            alerts.append({'kind':'外部预测待补','uid':lot['uid'],'ppn':lot['ppn'],'message':lot['lotId']+'：仅保留当前占用，最终完工待外部提供'})
+        if lot['state'] in ('RUNNING','EXTERNAL') and not lot.get('externalComplete'):
+            status = '设备已释放' if lot['state']=='EXTERNAL' else '保留当前在制占用'
+            alerts.append({'kind':'外部预测待补','uid':lot['uid'],'ppn':lot['ppn'],'message':f"{lot['lotId']}：{status}，最终完工待外部提供"})
     old_lots = {l['uid']:l for l in (baseline or {}).get('lots',[])}
     changes = []
     reliable = bool(d.get('identityStable') and (not baseline or baseline.get('identityStable')))

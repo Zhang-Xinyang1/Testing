@@ -6,12 +6,13 @@
   var tab = 'trial', query = '', status = 'all', product = 'all', page = 1;
   var scene = 'actual', extras = {}, reason = '', draftRules = null, snapshotDraft = '';
   var trialMode='shadow';
+  var mesWipDraft='', mesWipReceipt=null;
   var wipContext = null, wipDraft = null, wipPreview = null;
   var wipExample = 'CONFIRMED';
   var demoCatalog={scenarios:[],events:[]}, demoChoice='basic', presetChoice='arrival_known', validationReport=null;
   var excelDraft={}, mpsQuery='', chartPlanId=null;
   var sourceNames={demo:'内置演示',excel:'Excel',mes:'MES'};
-  var stateNames = {READY:'已到位',FUTURE:'预计来料',HOLD:'HOLD',RUNNING:'在制 · 外部接续',DONE:'实际完工'};
+  var stateNames = {READY:'已到位',FUTURE:'预计来料',HOLD:'HOLD',RUNNING:'在制 · 外部接续',EXTERNAL:'已释放 · 外部接续',DONE:'实际完工'};
   var views = {production:['生产看板','实际完成、预测产出与交期风险'],
     tracking:['Lot 查询','当前位置、跨机台路线与静置信息'],
     replanning:['滚动重排','数据变化 → 试排 → 比较 → 人工选用'],
@@ -135,7 +136,7 @@
     var d=state.snapshot, start=S.parseDate(d.month+'-01'), end=S.parseDate(nextMonth(d.month));
     return d.demands.map(function (p) {
       var actual=d.lots.filter(function(l){return l.ppn===p.ppn && l.state==='DONE' && S.parseDate(l.actualComplete)>=start && S.parseDate(l.actualComplete)<end;}).reduce(function(n,l){return n+l.wafer;},0);
-      var missing=d.lots.filter(function(l){return l.ppn===p.ppn&&l.state==='RUNNING'&&!l.externalComplete;}).reduce(function(n,l){return n+l.wafer;},0);
+      var missing=d.lots.filter(function(l){return l.ppn===p.ppn&&['RUNNING','EXTERNAL'].includes(l.state)&&!l.externalComplete;}).reduce(function(n,l){return n+l.wafer;},0);
       return {ppn:p.ppn,target:p.wafer,actual:actual,forecast:null,targetDelta:null,actualPlanDelta:null,forecastDelta:null,externalUnknownWafers:missing};
     });
   }
@@ -145,7 +146,7 @@
     var plan=currentPlan(), d=state.snapshot, facts=projectedRows(), products=plan?plan.products:facts, total=facts.reduce(function(n,p){return n+p.target;},0), actual=facts.reduce(function(n,p){return n+p.actual;},0);
     var forecast=plan?products.reduce(function(n,p){return n+p.forecast;},0):null;
     var pending=state.changePending && plan;
-    var html='<div class="prod-kpis">'+kpi('月度 MPS',A.num(total),'wafer')+kpi('实际完成',A.num(actual),'最后一道加工结束')+kpi('方案预计完成',forecast==null?'尚未试排':A.num(forecast),'含实际完成，不重复累加')+kpi('在制待外部预测',A.num(d.lots.filter(function(l){return l.state==='RUNNING'&&!l.externalComplete;}).reduce(function(n,l){return n+l.wafer;},0)),'wafer · 未计入明确预测')+'</div>';
+    var html='<div class="prod-kpis">'+kpi('月度 MPS',A.num(total),'wafer')+kpi('实际完成',A.num(actual),'最后一道加工结束')+kpi('方案预计完成',forecast==null?'尚未试排':A.num(forecast),'含实际完成，不重复累加')+kpi('在制待外部预测',A.num(d.lots.filter(function(l){return ['RUNNING','EXTERNAL'].includes(l.state)&&!l.externalComplete;}).reduce(function(n,l){return n+l.wafer;},0)),'wafer · 未计入明确预测')+'</div>';
     if (pending) html+='<div class="workflow-error">已收到新数据或规则变化。上方实际完成来自最新快照；下表及预测仍是已选方案的统计，需重新试排并选用。'+btn('goto-trial','查看变化与试排','primary')+'</div>';
     html+='<div class="card"><div class="card-head"><h3>产品达成与三种差额</h3><div class="source-actions"><button class="btn ghost" data-open-view="mps">MPS 产品明细</button><button class="btn ghost" data-export="mps">导出 MPS</button>'+btn('goto-trial','进入滚动重排','primary')+'</div></div><div class="card-body"><p class="config-hint">差额 = 前者减后者；负数表示不足。无基线显示“无基线”。本月按最后一道加工结束统计，静置期不延后产出。</p>'+table(['PPN','MPS / wafer','实际完成','预计完成','实际 − 原计划截至当前','新预测 − 原预测','预测 − 月目标','外部未知 / wafer'],products.map(function(p){return '<tr><td><button class="prod-link" data-prod-product="'+esc(p.ppn)+'">'+esc(p.ppn)+'</button></td>'+[p.target,p.actual,p.forecast==null?'待试排':p.forecast,delta(p.actualPlanDelta),delta(p.forecastDelta),p.forecast==null?'待试排':delta(p.targetDelta),p.externalUnknownWafers||0].map(cell).join('')+'</tr>';}))+'</div></div>';
     var alerts=plan?plan.alerts:[];
@@ -170,6 +171,8 @@
     var restStatus=lot.state!=='DONE'?'尚未确认开始，待最后加工实际完成':remaining>0?'剩余 '+remaining.toFixed(1)+' 小时':'已达到 336 小时';
     var html='<div class="prod-detail"><span class="pill">'+esc(stateNames[lot.state])+'</span><p>'+esc(lot.ppn)+' · '+lot.wafer+' wafer · '+esc(lot.uid)+'</p><div class="kv"><dt>实际位置</dt><dd>'+esc(lot.location||'待提供')+'</dd><dt>内部计划出货</dt><dd>'+fmt(lot.shipDue)+'</dd><dt>'+(lot.state==='DONE'?'实际':'计划')+'加工完工</dt><dd>'+fmt(complete)+'</dd><dt>'+(lot.state==='DONE'?'静置结束':'预计静置结束')+'</dt><dd>'+fmt(restEnd)+'</dd><dt>静置状态</dt><dd>'+restStatus+'</dd></div><p class="note-card">静置 14×24 小时是独立记录，不阻塞后续工序，不延后 MPS 完成统计。</p>';
     if (lot.state==='RUNNING') html+='<div class="note-card">当前 '+esc(lot.current.step)+' · '+esc(lot.current.eqp)+'<br>'+fmt(lot.current.start)+' → '+fmt(lot.current.end)+'<br>本系统仅保留当前占用；后续由外部系统负责。最终完工预测：'+fmt(lot.externalComplete)+'</div>';
+    if (lot.handoff) html+='<div class="note-card">'+esc(lot.handoff.step)+' · '+esc(lot.handoff.chamber||lot.handoff.eqp)+' 加工结束 '+fmt(lot.handoff.processEnd)+'，设备实际释放 '+fmt(lot.handoff.releasedAt)+'。外部终工预测 '+fmt(lot.externalComplete)+'</div>';
+    if (lot.wipEta) html+=table(['工序','预计到达（仅观察）'],Object.entries(lot.wipEta).map(function(pair){return '<tr>'+cell(pair[0])+cell(fmt(pair[1]))+'</tr>';}));
     html+='<h3>计划跨机台路线</h3><div class="prod-route">'+lot.tasks.map(function(t){return '<div><b>'+esc(t.step)+'</b><span>'+esc(t.machine||t.chamber||'等待')+'</span><small>'+fmt(t.start)+' → '+fmt(t.end)+'</small></div>';}).join('')+'</div><p class="config-hint">BAKE 任务开始包含升温，Lot 放行后仍有降温与换 Lot 占腔。</p>'+table(['工序','资源','Recipe','占用开始','任务开始','Lot 放行','资源释放','切换'],lot.tasks.map(function(t){return '<tr>'+[t.step,t.machine||t.chamber||'工艺等待',t.recipe,fmt(t.blockStart||t.start),fmt(t.start),fmt(t.end),fmt(t.resourceEnd||t.end),t.machine?'Recipe '+((t.recipeSetup||0)/60000)+' 分 + 针卡 '+((t.cardSetup||0)/60000)+' 分':'—'].map(cell).join('')+'</tr>';}));
     if (!lot.tasks.length) html+='<p>'+esc(lot.reason||'当前没有本系统安排的后续任务。')+'</p>';
     html+='</div>'; A.openDrawer('LOT TRACKING',lot.lotId,html);
@@ -270,16 +273,32 @@
       '<div class="card"><div class="card-head"><h3>数据与规则变化记录</h3></div><div class="card-body">'+table(['时间','类型','已知原因'],state.events.map(function(e){return '<tr>'+[fmt(e.time),e.kind,e.reason].map(cell).join('')+'</tr>';}))+'<p class="config-hint">记录事件事实；多种变化同时发生时，不将全部产出差额直接归因于某一事件。</p></div></div>'+
       (d.source==='demo'?'<details class="config-details"><summary>自定义变化（可选手工填写）</summary><div class="card"><div class="card-head"><h3>模拟生产变化</h3></div><div class="card-body"><div class="config-grid"><label class="config-field">事件<select class="select" id="prod-event-kind"><option value="arrival">来料时间变化</option><option value="due">内部出货日变化</option><option value="down">设备停机</option></select></label><label class="config-field">Lot<select id="prod-event-lot" class="select">'+d.lots.filter(function(l){return ['READY','FUTURE'].includes(l.state);}).map(function(l){return '<option value="'+esc(l.uid)+'">'+esc(l.lotId+' · '+l.uid)+'</option>';}).join('')+'</select></label><label class="config-field">设备（停机事件）<select id="prod-event-eqp" class="select">'+d.equipment.filter(function(e){return !e.type.includes('OVEN');}).map(function(e){return '<option>'+esc(e.id)+'</option>';}).join('')+'</select></label>'+input('prod-event-time','新的可用/出货时间；停机填写结束时间',dateValue(d.asOf),'datetime-local')+input('prod-event-reason','变更原因','')+'</div>'+btn('event','保存模拟变化')+'</div></div></details>':'');
   }
+  function mesWipHTML() {
+    var d=state.snapshot;
+    if(!d||d.source!=='mes') return '';
+    if(!d.identityStable) return '<p class="note-card">接入 WIP 事件前，请先接收带稳定 Lot UID 的 MES 完整快照。</p>';
+    var last=state.lastWipReceipt, r=mesWipReceipt;
+    var receipt=r?'<p>批次 '+esc(r.batchId)+'，新事件 '+esc(r.newEvents)+' 条，重复 '+esc(r.replayedEvents)+' 条。</p>'+
+      table(['页 / 行','Lot UID','事件','处理'],r.rows.slice(0,100).map(function(row){return '<tr>'+[row.page+' / '+row.row,row.uid,row.kind,({applied:'可接收',observed:'仅观察',replay:'已接收'})[row.status]].map(cell).join('')+'</tr>';}))+
+      (r.rows.length>100?'仅显示前 100 条。':''):'';
+    return '<div class="card"><div class="card-head"><h3>接收 MES WIP 批次</h3></div><div class="card-body">'+
+      '<p>当前基线 '+esc(d.snapshotId)+'，WIP 时点 '+fmt(d.asOf)+'，设备与计划时点 '+fmt(d.masterAsOf||d.asOf)+'。</p>'+
+      (last?'<p>最近接收 '+esc(last.batchId)+'，新事件 '+esc(last.newEvents)+' 条。</p>':'')+
+      '<label>选择 WIP JSON 文件 <input type="file" id="prod-mes-wip-file" accept=".json,application/json"></label>'+
+      '<label>或粘贴批次 JSON<textarea class="input prod-json" id="prod-mes-wip" aria-label="现场 WIP 批次">'+esc(mesWipDraft)+'</textarea></label>'+
+      btn('mes-wip-preview','校验 WIP 批次')+'<div id="prod-mes-wip-result">'+receipt+
+      (r&&!r.published&&r.baseSnapshotId===d.snapshotId?btn('mes-wip-import','接收本批 WIP','primary'):'')+'</div></div></div>';
+  }
   function settingsHTML() {
     var r=draftRules||state.rules;
-    return '<div class="card"><div class="card-head"><h3>生产规则</h3></div><div class="card-body"><div class="config-grid">'+
+    return mesWipHTML()+'<div class="card"><div class="card-head"><h3>生产规则</h3></div><div class="card-body"><div class="config-grid">'+
       input('prod-rule-recipeChangeMinutes','换 Recipe（分钟）',r.recipeChangeMinutes,'number','min="0" max="1440"')+
       input('prod-rule-maxRuntimeSeconds','计算上限（秒，最多 1800）',r.maxRuntimeSeconds,'number','min="1" max="1800"')+
       input('prod-rule-freezeHours','冻结范围（小时，待产线确认）',r.freezeHours,'number','min="0" max="744"')+
       input('prod-rule-checkTime','每日检查已接收数据的时刻',r.checkTime,'time')+input('prod-rule-planningLeadMinutes','现场计划准备时间（分钟）',r.planningLeadMinutes==null?35:r.planningLeadMinutes,'number','min="0" max="1440"')+input('prod-rule-snapshotMaxAgeMinutes','现场数据最大年龄（分钟）',r.snapshotMaxAgeMinutes==null?60:r.snapshotMaxAgeMinutes,'number','min="1" max="1440"')+
       input('prod-rule-delayAlertHours','延期预警阈值（小时）',r.delayAlertHours,'number','min="0" max="744"')+
       input('prod-rule-shortageAlertWafers','产品缺口预警阈值（wafer）',r.shortageAlertWafers,'number','min="1"')+'</div><p>换针卡固定 5 分钟，切换同时发生时相加。静置固定 336 小时，不阻塞后续。月度完成按最后一道加工结束。</p>'+btn('rules','保存规则','primary')+'<p class="config-hint">保存规则后需要重新试排。定时检查由服务端执行，只提示变化，不自动运行排产。</p><p>最近检查：'+(state.lastCheck?fmt(state.lastCheck.time)+' · '+esc(state.lastCheck.message):'尚未到检查时刻')+'</p></div></div>'+
-      '<div class="card"><div class="card-head"><h3>MES 数据接入</h3><span class="pill amber">字段约定 / 待联调</span></div><div class="card-body"><p>接收完整快照，实际调用方式可后续替换。需要需求、Lot 状态、资源、路线、Recipe、PM、借机及外部占用。稳定标识未确认时标记 identityStable=false。</p><details class="config-details"><summary>粘贴快照进行接收验证</summary><p>与演示数据使用同一校验规则。接收成功会更新工作台数据；不会改写 Excel 配置。请在 JSON 中明确 source=mes 或 demo。</p><textarea id="prod-snapshot" class="input prod-json" aria-label="MES 快照 JSON">'+esc(snapshotDraft)+'</textarea>'+btn('load-json','填入当前快照示例')+btn('snapshot','校验并接收快照','primary')+'</details></div></div>';
+      '<div class="card"><div class="card-head"><h3>MES 数据接入</h3></div><div class="card-body"><p>先接收完整月度快照，包括需求、Lot、资源、路线和计划。接收 WIP 增量还需要跨快照稳定的 Lot UID。</p><details class="config-details"><summary>导入或粘贴完整快照</summary><p>请在 JSON 中明确 source=mes 或 demo。</p><label>选择快照 JSON 文件 <input type="file" id="prod-snapshot-file" accept=".json,application/json"></label><textarea id="prod-snapshot" class="input prod-json" aria-label="MES 快照 JSON">'+esc(snapshotDraft)+'</textarea>'+btn('load-json','填入当前快照示例')+btn('snapshot','校验并接收快照','primary')+'</details></div></div>';
   }
   function replan() {
     var tabs={trial:'试排与比较',events:'变化记录',settings:'生产规则与 MES'};
@@ -331,6 +350,10 @@
     if(id.startsWith('prod-excel-'))excelDraft[id.slice(11)]=event.target.type==='checkbox'?event.target.checked:event.target.value;
     if(id==='prod-adopt-reason')reason=event.target.value;
     if(id==='prod-snapshot')snapshotDraft=event.target.value;
+    if(id==='prod-mes-wip'){
+      mesWipDraft=event.target.value; mesWipReceipt=null;
+      var previous=A.$('#prod-mes-wip-result'); if(previous)previous.textContent='';
+    }
     if(id==='prod-wip-feed'){
       wipDraft = event.target.value;
       wipExample = 'custom';
@@ -343,7 +366,20 @@
     if(id.startsWith('prod-rule-')) { draftRules=Object.assign({},draftRules||state.rules); draftRules[id.slice(10)]=event.target.type==='number'?Number(event.target.value):event.target.value; }
     if(event.target.dataset.prodExtra)extras[event.target.dataset.prodExtra]=Number(event.target.value);
   });
-  document.addEventListener('change',function(event){
+  document.addEventListener('change',async function(event){
+    if(['prod-snapshot-file','prod-mes-wip-file'].includes(event.target.id)&&event.target.files.length){
+      var baselineFile=event.target.id==='prod-snapshot-file';
+      if(baselineFile)snapshotDraft='';else {mesWipDraft='';mesWipReceipt=null;}
+      try {
+        var file=event.target.files[0];
+        if(file.size>20000000)throw new Error('单批文件不能超过 20 MB');
+        var contents=await file.text();
+        if(baselineFile){snapshotDraft=contents;A.$('#prod-snapshot').value=contents;return;}
+        mesWipDraft=contents;
+        failure='';
+      } catch(err){failure=err.message;}
+      render();return;
+    }
     if(event.target.id==='prod-wip-example' && currentWipContext() && ['CONFIRMED','ETA'].includes(event.target.value)){
       wipExample = event.target.value;
       wipDraft = JSON.stringify(sampleWipFeed(state.snapshot, wipExample), null, 2);
@@ -376,6 +412,7 @@
     busy=true;failure='';
     try {
       if(action.startsWith('source-')){
+        mesWipDraft=''; mesWipReceipt=null;
         resetWipDraft();
         A.closeDrawer();
         state=await request('/source',{source:action.slice(7)});job=null;draftRules=null;reason='';excelDraft={};chartPlanId=null;
@@ -419,6 +456,18 @@
       if(action==='demo-event'){state=await request('/demo-event',{event:presetChoice});A.toast('变化已保存，请重新试排比较');}
       if(action==='rules'){state=await request('/rules',draftRules||state.rules);draftRules=null;}
       if(action==='snapshot'){state=await request('/snapshot',JSON.parse(snapshotDraft));}
+      if(action==='mes-wip-preview'){
+        mesWipReceipt=null;
+        var draftText=mesWipDraft;
+        var validated=await request('/wip-batch-preview',JSON.parse(draftText));
+        if(draftText===mesWipDraft)mesWipReceipt=validated;
+      }
+      if(action==='mes-wip-import'){
+        if(!mesWipReceipt||mesWipReceipt.baseSnapshotId!==state.snapshot.snapshotId)throw new Error('请重新校验当前基线的 WIP 批次');
+        await request('/wip-batch-import',JSON.parse(mesWipDraft));
+        mesWipReceipt=null;mesWipDraft='';state=await request('');tab='trial';
+        A.toast('WIP 已接收，请试排并比较方案');
+      }
       if(action==='trial'){
         if(Object.keys(excelDraft).length)throw new Error('Excel 补充信息尚未接收，请先点击“接收已保存 Excel 与补充信息”');
         if(A.hasConfigurationChanges&&A.hasConfigurationChanges())throw new Error('Excel 配置有未保存修改，请先保存或放弃草稿');
@@ -437,7 +486,7 @@
         var value=A.$('#prod-event-time').value;
         state=await request('/event',{kind:A.$('#prod-event-kind').value,uid:A.$('#prod-event-lot').value,eqp:A.$('#prod-event-eqp').value,time:value?S.isoDate(S.parseDate(value)):null,reason:A.$('#prod-event-reason').value});
       }
-    } catch(error){failure=error.message;if(action==='snapshot'){try{state=await request('');}catch(ignored){}}}
+    } catch(error){failure=error.message;if(action==='snapshot'||action==='mes-wip-import'){try{state=await request('');}catch(ignored){}}}
     finally{busy=false;render();}
   });
 })();
